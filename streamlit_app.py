@@ -10,11 +10,10 @@ from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from streamlit_option_menu import option_menu
 from scipy.stats import norm
-import time
 
-st.set_page_config(page_title="SPY Pro v2.1", layout="wide")
-st.title("SPY Trade Dashboard Pro v2.1")
-st.caption("Live SPY signals | $25k bankroll | Auto-Tracker | Paper/Live | Fixed & Stable")
+st.set_page_config(page_title="SPY Pro v2.2", layout="wide")
+st.title("SPY Trade Dashboard Pro v2.2")
+st.caption("Live signals | $25k | Tracker | Paper/Live | Nov 2025")
 
 # --- Session State ---
 if 'trade_log' not in st.session_state:
@@ -52,12 +51,12 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Failed: {e}")
 
-# --- Data Fetch (NO CACHING COMPLEX OBJECTS) ---
+# --- Data Fetch ---
 def get_market_data():
     try:
         spy = yf.Ticker("SPY")
-        S = spy.fast_info.get("lastPrice", 0)
-        vix = yf.Ticker("^VIX").fast_info.get("lastPrice", 20)
+        S = spy.fast_info.get("lastPrice", 540.0)
+        vix = yf.Ticker("^VIX").fast_info.get("lastPrice", 20.0)
         hist = spy.history(period="5d", interval="1m")
         if hist.empty:
             hist = pd.DataFrame({"Close": [S]*10}, index=pd.date_range(end=datetime.now(), periods=10, freq='1min'))
@@ -111,8 +110,8 @@ elif selected == "Signals":
     vwap = (hist['Close'] * hist['Volume']).cumsum() / hist['Volume'].cumsum()
     if len(hist) > 1 and hist['Close'].iloc[-1] > vwap.iloc[-1] and hist['Close'].iloc[-2] <= vwap.iloc[-2]:
         signals.append({
-            "Strategy": "VWAP Breakout", "Action": "Buy SPY Call", "Size": "1", "Risk": f"${ACCOUNT_SIZE * RISK_PCT:.0f}",
-            "POP": "60%", "Exit": "+$1", "Symbol": "SPY"
+            "Strategy": "VWAP Breakout", "Action": "Buy SPY Call", "Size": "1",
+            "Risk": f"${ACCOUNT_SIZE * RISK_PCT:.0f}", "POP": "60%", "Exit": "+$1", "Symbol": "SPY"
         })
 
     # Iron Condor
@@ -123,7 +122,7 @@ elif selected == "Signals":
         try:
             chain = spy.option_chain(exp)
             calls = chain.calls[chain.calls.bid > 0.01]
-            puts = chain.puts[puts.bid > 0.01]
+            puts = chain.puts[chain.puts.bid > 0.01]
             if calls.empty or puts.empty: continue
             iv = get_iv(calls, puts, S)
 
@@ -164,7 +163,7 @@ elif selected == "Signals":
                         Risk=sig['Risk'],
                         POP=sig['POP'],
                         Exit=sig['Exit'],
-                        Result="Executed (Paper)" if PAPER_MODE else "Live Order",
+                        Result="Paper" if PAPER_MODE else "Live",
                         P&L=0.0,
                         Type="Paper" if PAPER_MODE else "Live"
                     )
@@ -188,16 +187,20 @@ elif selected == "Trade Tracker":
     else:
         st.info("No trades")
 
-# --- Glossary / Settings ---
+# --- Glossary ---
 elif selected == "Glossary":
-    st.write("**Delta**: Sensitivity to price. **Theta**: Time decay. **IV**: Volatility. **POP**: Win chance.")
+    st.write("**Delta**: Price sensitivity. **Theta**: Time decay. **IV**: Volatility. **POP**: Win chance.")
 
+# --- Settings ---
 elif selected == "Settings":
     st.write("Bankroll: $25,000 | Risk: 1% = $250/trade")
     if st.button("Clear Logs"):
         st.session_state.trade_log = pd.DataFrame(columns=st.session_state.trade_log.columns)
         st.rerun()
 
-# Auto-refresh
-time.sleep(60)
-st.rerun()
+# --- Auto-refresh every 60 seconds (non-blocking) ---
+st.markdown("""
+<script>
+    setTimeout(() => location.reload(), 60000);
+</script>
+""", unsafe_allow_html=True)
