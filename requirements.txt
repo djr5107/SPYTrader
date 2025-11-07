@@ -6,3 +6,4 @@ plotly
 alpaca-py
 streamlit-option-menu
 scipy
+# schwab-py  # Uncomment for Schwab integration (pip install schwab-py)
