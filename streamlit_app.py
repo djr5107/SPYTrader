@@ -8,17 +8,18 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from streamlit_option_menu import option_menu
 
-st.set_page_config(page_title="SPY Pro v2.15", layout="wide")
-st.title("SPY Trade Dashboard Pro v2.15")
+st.set_page_config(page_title="SPY Pro v2.16", layout="wide")
+st.title("SPY Trade Dashboard Pro v2.16")
 st.caption("Auto-Paper Entry + Exit | Live Timestamps | Clean Backtest | Princeton Meadows")
 
 # --- Session State ---
 if 'trade_log' not in st.session_state:
     st.session_state.trade_log = pd.DataFrame(columns=[
-        'Entry Time', 'Strategy', 'Action', 'Size', 'Risk', 'POP', 'Exit Rule', 'Exit Time', 'P&L', 'Status'
+        'Entry Time', 'Strategy', 'Action', 'Size', 'Risk', 'POP', 'Exit Rule',
+        'Exit Time', 'P&L', 'Status'
     ])
 if 'active_paper_trades' not in st.session_state:
-    st.session_state.active_paper_trades = []  # Track open paper trades
+    st.session_state.active_paper_trades = []   # list of dicts with datetime entry
 
 # --- Sidebar ---
 with st.sidebar:
@@ -48,7 +49,8 @@ def get_market_data():
         vix = yf.Ticker("^VIX").fast_info.get("lastPrice", 17.38)
         hist = spy.history(period="5d", interval="1m")
         if hist.empty:
-            hist = pd.DataFrame({"Close": [S] * 10}, index=pd.date_range(end=datetime.now(), periods=10, freq='1min'))
+            hist = pd.DataFrame({"Close": [S] * 10},
+                                index=pd.date_range(end=datetime.now(), periods=10, freq='1min'))
         return float(S), float(vix), hist
     except:
         return 671.50, 17.38, pd.DataFrame({"Close": [671.50] * 10})
@@ -56,40 +58,41 @@ def get_market_data():
 S, vix, hist = get_market_data()
 
 # --- Log Trade ---
-def log_trade(entry_time, strategy, action, size, risk, pop, exit_rule, exit_time, pnl, status):
+def log_trade(entry_dt, strategy, action, size, risk, pop, exit_rule, exit_dt, pnl, status):
     new_trade = pd.DataFrame([{
-        'Entry Time': entry_time,
+        'Entry Time': entry_dt.strftime("%m/%d %H:%M"),
         'Strategy': strategy,
         'Action': action,
         'Size': size,
         'Risk': risk,
         'POP': pop,
         'Exit Rule': exit_rule,
-        'Exit Time': exit_time,
+        'Exit Time': exit_dt.strftime("%m/%d %H:%M") if exit_dt else "Pending",
         'P&L': pnl,
         'Status': status
     }])
-    st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_trade], ignore_index=True)
+    st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_trade],
+                                          ignore_index=True)
 
 # --- Simulate Trade Exit (Auto-Paper) ---
 def simulate_exit():
     now = datetime.now(ZoneInfo("US/Eastern"))
     for trade in st.session_state.active_paper_trades[:]:
-        entry_time = datetime.strptime(trade['entry_time'], "%m/%d %H:%M")
-        minutes_held = (now - entry_time).total_seconds() / 60
+        entry_dt = trade['entry_dt']
+        minutes_held = (now - entry_dt).total_seconds() / 60
         if minutes_held >= trade['hold_minutes']:
-            # Simulate P&L
+            # win / loss based on POP
             win = np.random.random() < (float(trade['pop'].strip('%')) / 100)
             pnl = trade['profit_target'] if win else -trade['risk_amount']
             log_trade(
-                entry_time=trade['entry_time'],
+                entry_dt=entry_dt,
                 strategy=trade['strategy'],
                 action=trade['action'],
                 size=trade['size'],
                 risk=f"${trade['risk_amount']}",
                 pop=trade['pop'],
                 exit_rule=trade['exit_rule'],
-                exit_time=now.strftime("%m/%d %H:%M"),
+                exit_dt=now,
                 pnl=pnl,
                 status="Closed"
             )
@@ -104,59 +107,65 @@ if selected == "Trading Hub":
     col2.metric("VIX (Live)", f"{vix:.2f}")
     col3.metric("Risk/Trade", f"${ACCOUNT_SIZE * RISK_PCT:.0f}")
 
-    # Run exit simulation
+    # Run exit simulation first
     simulate_exit()
 
-    # Generate Live Signal
-    now_str = datetime.now(ZoneInfo("US/Eastern")).strftime("%m/%d %H:%M")
-    if is_market_open() and len([t for t in st.session_state.active_paper_trades if t['entry_time'] == now_str]) == 0:
-        signals = [
-            {
-                "entry_time": now_str,
-                "strategy": "Iron Condor",
-                "action": "Sell 650P/655P - 685C/690C",
-                "size": "2",
-                "risk_amount": 220,
-                "pop": "80%",
-                "exit_rule": "50% profit or 240 min",
-                "hold_minutes": 240,
-                "profit_target": 90
-            }
-        ]
+    # ---- Generate a new signal (only once per minute) ----
+    now_dt = datetime.now(ZoneInfo("US/Eastern"))
+    now_str = now_dt.strftime("%m/%d %H:%M")
+    already_open = any(t['entry_dt'].strftime("%m/%d %H:%M") == now_str
+                       for t in st.session_state.active_paper_trades)
+
+    if is_market_open() and not already_open:
+        # Example signal – in a real system pull from strategy engine
+        signal = {
+            "entry_dt": now_dt,
+            "strategy": "Iron Condor",
+            "action": "Sell 650P/655P - 685C/690C",
+            "size": "2",
+            "risk_amount": 220,
+            "pop": "80%",
+            "exit_rule": "50% profit or 240 min",
+            "hold_minutes": 240,
+            "profit_target": 90
+        }
+        signals = [signal]
     else:
         signals = []
 
     if signals:
-        st.success(f"New Signal @ {signals[0]['entry_time']}")
         sig = signals[0]
-        with st.expander(f"**{sig['strategy']}** – {sig['action']} – **{sig['entry_time']}**"):
+        st.success(f"New Signal @ **{sig['entry_dt'].strftime('%m/%d %H:%M')}**")
+        with st.expander(f"**{sig['strategy']}** – {sig['action']}"):
             st.write(f"**Size:** {sig['size']} | **Risk:** ${sig['risk_amount']} | **POP:** {sig['pop']}")
             st.caption(f"**Exit Rule:** {sig['exit_rule']}")
-            if st.button("Auto-Paper This Signal", key=f"auto_{sig['entry_time']}"):
+            if st.button("Auto-Paper This Signal", key=f"auto_{sig['entry_dt']}"):
+                # add to active list
                 st.session_state.active_paper_trades.append(sig.copy())
+                # log as Open
                 log_trade(
-                    entry_time=sig['entry_time'],
+                    entry_dt=sig['entry_dt'],
                     strategy=sig['strategy'],
                     action=sig['action'],
                     size=sig['size'],
                     risk=f"${sig['risk_amount']}",
                     pop=sig['pop'],
                     exit_rule=sig['exit_rule'],
-                    exit_time="Pending",
+                    exit_dt=None,
                     pnl="Open",
                     status="Open"
                 )
-                st.success("Auto-Paper Started – Will close automatically.")
+                st.success("Auto-Paper started – will close automatically.")
                 st.rerun()
 
-    # Chart
+    # ---- Chart ----
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=hist.index[-100:], y=hist['Close'].iloc[-100:], name="Price"))
     fig.add_hline(y=S, line_dash="dash", line_color="orange")
     fig.update_layout(title="SPY Live Chart", height=400)
     st.plotly_chart(fig, use_container_width=True)
 
-# --- Clean Backtest (25 Unique, Verified Trades) ---
+# --- Backtest (25 unique, clean) ---
 elif selected == "Backtest":
     st.header("Backtest: 25 Unique Verified SPY Trades")
 
@@ -189,7 +198,8 @@ elif selected == "Backtest":
     ]
 
     df = pd.DataFrame(backtest_data, columns=[
-        "Entry Time", "Strategy", "Action", "Size", "Credit", "Risk", "POP", "Exit Rule", "Exit Time", "P&L", "Thesis"
+        "Entry Time", "Strategy", "Action", "Size", "Credit", "Risk", "POP",
+        "Exit Rule", "Exit Time", "P&L", "Thesis"
     ])
     df["P&L"] = df["P&L"].str.replace(r'[\+\$\,]', '', regex=True).astype(float)
     df["Risk"] = df["Risk"].str.replace(r'[\$\,]', '', regex=True).astype(float)
@@ -204,31 +214,45 @@ elif selected == "Backtest":
         with st.expander(f"**{row['Entry Time']} | {row['Strategy']} | P&L: {row['P&L']:+.0f}**"):
             st.write(f"**Action:** {row['Action']} | **Size:** {row['Size']}")
             st.write(f"**Credit:** {row['Credit']} | **Risk:** ${row['Risk']:.0f} | **POP:** {row['POP']}")
-            st.caption(f"**Exit:** {row['Exit Rule']} → {row['Exit Time']} | **Thesis:** {row['Thesis']}")
+            st.caption(f"**Exit:** {row['Exit Rule']} to {row['Exit Time']} | **Thesis:** {row['Thesis']}")
 
-# --- Sample Trades, Trade Tracker, Glossary, Settings (unchanged) ---
+# --- Sample Trades (unchanged) ---
 elif selected == "Sample Trades":
     st.header("Sample Trades")
-    # [Same as v2.14 — 3 full examples]
+    samples = [
+        {"Strategy":"Iron Condor","Action":"Sell 650P/655P - 685C/690C","Size":"2","Credit":"$0.90","Risk":"$220","POP":"80%","Exit":"50% profit or 21 DTE","Trigger":"VIX<20, IV Rank>40%","Thesis":"Range-bound, high theta."},
+        {"Strategy":"VWAP Breakout","Action":"Buy SPY 0DTE Call (ATM)","Size":"1","Credit":"N/A","Risk":"$250","POP":"60%","Exit":"+$1 or stop -$0.50","Trigger":"Cross VWAP after 10 AM + volume","Thesis":"Momentum scalp."},
+        {"Strategy":"Bull Put Spread","Action":"Sell 660P/655P","Size":"3","Credit":"$1.20","Risk":"$210","POP":"85%","Exit":"EOD or 50% profit","Trigger":"SPY>20-day EMA, VIX<20","Thesis":"Bullish credit."}
+    ]
+    for s in samples:
+        with st.expander(f"**{s['Strategy']}** – {s['Action']}"):
+            col1, col2 = st.columns(2)
+            col1.write(f"**Size:** {s['Size']}"); col1.write(f"**Credit:** {s['Credit']}")
+            col1.write(f"**Risk:** {s['Risk']}"); col2.write(f"**POP:** {s['POP']}")
+            col2.write(f"**Exit:** {s['Exit']}")
+            st.markdown(f"**Trigger:** *{s['Trigger']}*")
+            st.caption(f"**Thesis:** {s['Thesis']}")
 
+# --- Trade Tracker ---
 elif selected == "Trade Tracker":
     st.header("Trade Tracker: Auto-Paper Lifecycle")
     if not st.session_state.trade_log.empty:
         df = st.session_state.trade_log
         st.dataframe(df, use_container_width=True)
-        open_trades = df[df['Status'] == 'Open']
-        if not open_trades.empty:
-            st.info(f"{len(open_trades)} Open Auto-Paper Trades – Will close automatically.")
+        open_cnt = len(df[df['Status'] == 'Open'])
+        if open_cnt:
+            st.info(f"{open_cnt} Open Auto-Paper trade(s) – will close automatically.")
         csv = df.to_csv(index=False).encode()
         st.download_button("Export CSV", csv, "spy_trades.csv", "text/csv")
     else:
         st.info("No signals yet. Wait for market open.")
 
+# --- Glossary / Settings ---
 elif selected == "Glossary":
-    st.write("**Auto-Paper**: Full entry + exit automation. **POP**: Probability of Profit.")
+    st.write("**Auto-Paper** – full entry + exit automation. **POP** – Probability of Profit.")
 
 elif selected == "Settings":
-    st.write("**Bankroll**: $25,000 | **Risk**: 1% = $250")
+    st.write("**Bankroll:** $25,000 | **Risk:** 1% = $250")
 
 # --- Auto-refresh ---
 st.markdown("""
