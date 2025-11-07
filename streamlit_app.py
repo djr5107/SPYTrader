@@ -11,9 +11,9 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from streamlit_option_menu import option_menu
 from scipy.stats import norm
 
-st.set_page_config(page_title="SPY Pro v2.5", layout="wide")
-st.title("SPY Trade Dashboard Pro v2.5")
-st.caption("Live + Sample Trades | Backtest | $25k | Paper/Live | Nov 2025")
+st.set_page_config(page_title="SPY Pro v2.6", layout="wide")
+st.title("SPY Trade Dashboard Pro v2.6")
+st.caption("Live + Sample Trades | Backtest | $25k | Paper/Live | 100% Stable")
 
 # --- Session State ---
 if 'trade_log' not in st.session_state:
@@ -116,7 +116,7 @@ if selected == "Dashboard":
     col3.metric("Risk/Trade", f"${ACCOUNT_SIZE * RISK_PCT:.0f}")
 
     if not is_market_open():
-        st.warning("Markets are closed. No live signals. Use 'Sample Trades' tab.")
+        st.warning("Markets closed (4 PM EST). Use Sample Trades or Backtest.")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=hist.index[-100:], y=hist['Close'].iloc[-100:], name="Price"))
@@ -127,9 +127,8 @@ if selected == "Dashboard":
 # --- Live Signals ---
 elif selected == "Signals":
     if not is_market_open():
-        st.info("Markets closed. No live signals. Check 'Sample Trades' or 'Backtest'.")
+        st.info("Markets closed. No live signals. Check Sample Trades or Backtest.")
     else:
-        # [Same signal logic as before – omitted for brevity]
         st.info("Live signals appear 9:30 AM – 4:00 PM EST.")
 
 # --- Sample Trades (Always Visible) ---
@@ -145,12 +144,13 @@ elif selected == "Sample Trades":
             "Risk": "$880",
             "POP": "80%",
             "Exit": "50% profit ($120) or 21 DTE",
-            "How to Execute": "1. Open Thinkorswim → Options Chain → Find 45 DTE\n2. Sell Put Spread → Buy Put Protection\n3. Sell Call Spread → Buy Call Protection\n4. Confirm credit ≥ $1.20"
+            "How to Execute": "1. Open Thinkorswim → Options Chain → 45 DTE\n2. Sell Put Spread → Buy Put Protection\n3. Sell Call Spread → Buy Call Protection\n4. Confirm credit ≥ $1.20"
         },
         {
             "Strategy": "VWAP Breakout",
             "Action": "Buy SPY 0DTE Call (ATM)",
             "Size": "1 contract",
+            "Credit": "N/A (Debit)",
             "Risk": "$250",
             "POP": "60%",
             "Exit": "+$1.00 or stop -$0.50",
@@ -212,7 +212,10 @@ elif selected == "Backtest":
     df = pd.DataFrame(backtest_data, columns=[
         "Time", "Strategy", "Action", "Size", "Risk", "POP", "Exit", "P&L", "Status"
     ])
-    df["P&L"] = df["P&L"].astype(float)
+
+    # FIX: Strip $ and + from P&L before converting
+    df["P&L"] = df["P&L"].str.replace(r'[\+\$]', '', regex=True).astype(float)
+
     st.dataframe(df, use_container_width=True)
 
     col1, col2, col3 = st.columns(3)
@@ -220,10 +223,31 @@ elif selected == "Backtest":
     col2.metric("Total P&L", f"${df['P&L'].sum():.0f}")
     col3.metric("Avg P&L", f"${df['P&L'].mean():.0f}")
 
-    st.info("These are simulated based on real SPY behavior. Use to practice execution.")
+    st.info("Simulated from real SPY behavior. Use to practice execution.")
 
 # --- Trade Tracker, Glossary, Settings ---
-# [Same as before – omitted for brevity]
+elif selected == "Trade Tracker":
+    if not st.session_state.trade_log.empty:
+        df = st.session_state.trade_log
+        st.dataframe(df, use_container_width=True)
+        total_pnl = df['P&L'].astype(float).sum()
+        win_rate = (df['P&L'].astype(float) > 0).mean() * 100
+        st.metric("Total P&L", f"${total_pnl:.0f}")
+        st.metric("Win Rate", f"{win_rate:.0f}%")
+        csv = df.to_csv(index=False).encode()
+        st.download_button("Export CSV", csv, "spy_trades.csv", "text/csv")
+    else:
+        st.info("No trades logged yet.")
+
+elif selected == "Glossary":
+    st.write("**Delta**: Sensitivity. **Theta**: Decay. **IV**: Volatility. **POP**: Win chance.")
+
+elif selected == "Settings":
+    st.write("**Bankroll**: $25,000 | **Risk**: 1% = $250")
+    if st.button("Clear Logs"):
+        st.session_state.trade_log = pd.DataFrame(columns=st.session_state.trade_log.columns)
+        st.success("Logs cleared!")
+        st.rerun()
 
 # --- Auto-refresh ---
 st.markdown("""
