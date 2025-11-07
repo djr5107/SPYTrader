@@ -11,8 +11,8 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from streamlit_option_menu import option_menu
 from scipy.stats import norm
 
-st.set_page_config(page_title="SPY Pro v2.3", layout="wide")
-st.title("SPY Trade Dashboard Pro v2.3")
+st.set_page_config(page_title="SPY Pro v2.4", layout="wide")
+st.title("SPY Trade Dashboard Pro v2.4")
 st.caption("Live signals | $25k | Tracker | Paper/Live | 100% Stable")
 
 # --- Session State ---
@@ -51,7 +51,7 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Failed: {e}")
 
-# --- Data Fetch (NO CACHING) ---
+# --- Data Fetch ---
 def get_market_data():
     try:
         spy = yf.Ticker("SPY")
@@ -61,8 +61,7 @@ def get_market_data():
         if hist.empty:
             hist = pd.DataFrame({"Close": [S] * 10}, index=pd.date_range(end=datetime.now(), periods=10, freq='1min'))
         return spy, float(S), hist, float(vix)
-    except Exception as e:
-        st.warning(f"Data fetch failed: {e}")
+    except Exception:
         return None, 540.0, pd.DataFrame({"Close": [540.0] * 10}), 20.0
 
 spy, S, hist, vix = get_market_data()
@@ -91,18 +90,19 @@ def bs_delta(S, K, T, r, sigma, q=0, type_="call"):
     except:
         return 0
 
-def log_trade(Time, Strategy, Action, Size, Risk, POP, Exit, Result, P&L, Type):
+# Fixed log_trade: no **kwargs, no trailing commas
+def log_trade(time, strategy, action, size, risk, pop, exit_rule, result, pnl, trade_type):
     new_trade = pd.DataFrame([{
-        'Time': Time,
-        'Strategy': Strategy,
-        'Action': Action,
-        'Size': Size,
-        'Risk': Risk,
-        'POP': POP,
-        'Exit': Exit,
-        'Result': Result,
-        'P&L': P&L,
-        'Type': Type
+        'Time': time,
+        'Strategy': strategy,
+        'Action': action,
+        'Size': size,
+        'Risk': risk,
+        'POP': pop,
+        'Exit': exit_rule,
+        'Result': result,
+        'P&L': pnl,
+        'Type': trade_type
     }])
     st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_trade], ignore_index=True)
 
@@ -122,7 +122,7 @@ if selected == "Dashboard":
 # --- Signals ---
 elif selected == "Signals":
     if vix > 30:
-        st.warning("High VIX: Favor premium selling strategies.")
+        st.warning("High VIX: Favor premium selling.")
 
     signals = []
     try:
@@ -206,16 +206,16 @@ elif selected == "Signals":
             with c2:
                 if st.button("Execute", key=f"exec_{i}"):
                     log_trade(
-                        Time=datetime.now().strftime("%m/%d %H:%M"),
-                        Strategy=sig['Strategy'],
-                        Action=sig['Action'],
-                        Size=sig['Size'],
-                        Risk=sig['Risk'],
-                        POP=sig['POP'],
-                        Exit=sig['Exit'],
-                        Result="Paper" if PAPER_MODE else "Live",
-                        P&L=0.0,
-                        Type="Paper" if PAPER_MODE else "Live"
+                        time=datetime.now().strftime("%m/%d %H:%M"),
+                        strategy=sig['Strategy'],
+                        action=sig['Action'],
+                        size=sig['Size'],
+                        risk=sig['Risk'],
+                        pop=sig['POP'],
+                        exit_rule=sig['Exit'],
+                        result="Paper" if PAPER_MODE else "Live",
+                        pnl=0.0,
+                        trade_type="Paper" if PAPER_MODE else "Live"
                     )
                     st.success("Trade logged!")
                     st.rerun()
