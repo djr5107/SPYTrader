@@ -5,3 +5,4 @@ numpy
 plotly
 alpaca-py
 streamlit-option-menu
+scipy
