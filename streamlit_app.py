@@ -580,12 +580,13 @@ elif selected == "Backtest":
             hist = None
             data_interval = None
             
-            # Try different data granularities
+            # Try different data granularities - extended lookback
             attempts = [
-                ("5d", "5m", "5-minute"),
-                ("5d", "15m", "15-minute"),
-                ("1mo", "1h", "hourly"),
-                ("3mo", "1d", "daily"),
+                ("1mo", "5m", "5-minute"),   # Try 1 month of 5-min data
+                ("1mo", "15m", "15-minute"), # 1 month of 15-min data
+                ("3mo", "1h", "hourly"),     # 3 months of hourly
+                ("6mo", "1d", "daily"),      # 6 months of daily
+                ("1y", "1d", "daily"),       # 1 year of daily
             ]
             
             for period, interval, desc in attempts:
@@ -630,52 +631,52 @@ elif selected == "Backtest":
                             continue
                 
                 if not in_position:
-                    # Look for entry signals
+                    # Look for entry signals - LOWERED THRESHOLDS FOR MORE TRADES
                     
-                    # Signal 1: Strong volume spike with momentum
-                    if (hist['volume_ratio'].iloc[i] > 1.8 and 
+                    # Signal 1: Volume spike with momentum (lowered from 1.8x to 1.4x)
+                    if (hist['volume_ratio'].iloc[i] > 1.4 and 
                         hist['price_change'].iloc[i] > 0 and
                         current_price > hist['SMA_20'].iloc[i]):
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"High volume spike ({hist['volume_ratio'].iloc[i]:.1f}x avg) with bullish momentum above SMA20 (${hist['SMA_20'].iloc[i]:.2f})"
+                        entry_reason = f"Volume spike ({hist['volume_ratio'].iloc[i]:.1f}x avg) with bullish momentum above SMA20 (${hist['SMA_20'].iloc[i]:.2f})"
                         signal_type = "Volume Breakout"
                         security = "SPY"
                         order_type = "BUY"
                         continue
                     
-                    # Signal 2: Golden cross pattern
+                    # Signal 2: Golden cross pattern (lowered volume requirement)
                     if (hist['SMA_20'].iloc[i] > hist['SMA_50'].iloc[i] and 
                         hist['SMA_20'].iloc[i-1] <= hist['SMA_50'].iloc[i-1] and
-                        current_volume > hist['volume_ma'].iloc[i]):
+                        current_volume > hist['volume_ma'].iloc[i] * 0.8):
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"SMA20 (${hist['SMA_20'].iloc[i]:.2f}) crossed above SMA50 (${hist['SMA_50'].iloc[i]:.2f}) - golden cross signal with volume confirmation"
+                        entry_reason = f"SMA20 (${hist['SMA_20'].iloc[i]:.2f}) crossed above SMA50 (${hist['SMA_50'].iloc[i]:.2f}) - golden cross signal"
                         signal_type = "Golden Cross"
                         security = "SPY"
                         order_type = "BUY"
                         continue
                     
-                    # Signal 3: Strong breakout above SMA20
-                    if (current_price > hist['SMA_20'].iloc[i] * 1.003 and 
+                    # Signal 3: Breakout above SMA20 (lowered from 1.003 to 1.001)
+                    if (current_price > hist['SMA_20'].iloc[i] * 1.001 and 
                         hist['Close'].iloc[i-1] <= hist['SMA_20'].iloc[i-1] and
-                        hist['volume_ratio'].iloc[i] > 1.3):
+                        hist['volume_ratio'].iloc[i] > 1.1):
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"Price broke above SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with strong volume ({hist['volume_ratio'].iloc[i]:.1f}x average)"
+                        entry_reason = f"Price broke above SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with volume ({hist['volume_ratio'].iloc[i]:.1f}x average)"
                         signal_type = "SMA Breakout"
                         security = "SPY"
                         order_type = "BUY"
                         continue
                     
-                    # Signal 4: Oversold bounce
+                    # Signal 4: Oversold bounce (lowered thresholds)
                     recent_low = hist['Close'].iloc[i-10:i].min()
-                    if (current_price < recent_low * 1.001 and 
-                        hist['price_change'].iloc[i] > 0.002 and
-                        current_volume > hist['volume_ma'].iloc[i] * 1.5):
+                    if (current_price < recent_low * 1.003 and 
+                        hist['price_change'].iloc[i] > 0.001 and
+                        current_volume > hist['volume_ma'].iloc[i] * 1.2):
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
@@ -685,15 +686,15 @@ elif selected == "Backtest":
                         order_type = "BUY"
                         continue
                     
-                    # Signal 5: Bearish breakdown for SHORT
-                    if (current_price < hist['SMA_20'].iloc[i] * 0.997 and
+                    # Signal 5: Bearish breakdown for SHORT (lowered thresholds)
+                    if (current_price < hist['SMA_20'].iloc[i] * 0.999 and
                         hist['Close'].iloc[i-1] >= hist['SMA_20'].iloc[i-1] and
-                        hist['volume_ratio'].iloc[i] > 1.5 and
-                        hist['price_change'].iloc[i] < -0.003):
+                        hist['volume_ratio'].iloc[i] > 1.2 and
+                        hist['price_change'].iloc[i] < -0.002):
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"Price broke below SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with high volume ({hist['volume_ratio'].iloc[i]:.1f}x) - bearish breakdown"
+                        entry_reason = f"Price broke below SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with volume ({hist['volume_ratio'].iloc[i]:.1f}x) - bearish breakdown"
                         signal_type = "Bearish Breakdown"
                         security = "SPY"
                         order_type = "SELL SHORT"
@@ -719,44 +720,45 @@ elif selected == "Backtest":
                     exit_triggered = False
                     exit_reason = ""
                     
-                    # Exit 1: Profit target reached (2% for better risk/reward)
-                    if pnl_pct >= 0.020:  # 2% profit target
-                        exit_triggered = True
-                        exit_reason = f"Profit target reached (+{pnl_pct*100:.2f}%) - took profit at 2% gain"
+                    # Exit 1: REMOVED PROFIT CAP - Let winners run to 10%+!
+                    # Only exit on stop loss, time limit, or trailing stop
                     
-                    # Exit 2: Stop loss hit (0.75% to give room but protect capital)
-                    elif pnl_pct <= -0.0075:  # 0.75% stop loss
+                    # Exit 2: Stop loss hit (0.75% to protect capital)
+                    if pnl_pct <= -0.0075:  # 0.75% stop loss
                         exit_triggered = True
                         exit_reason = f"Stop loss triggered ({pnl_pct*100:.2f}%) - cut losses at 0.75%"
                     
-                    # Exit 3: Time-based exit (adjusted for better R:R)
-                    elif time_in_trade >= 1200:  # ~3 trading days for daily data, ~20 hours for intraday
+                    # Exit 3: Extended time limit (10 days for daily, 50 hours for intraday)
+                    elif time_in_trade >= 3900:  # ~10 trading days for daily, ~65 hours for intraday
                         exit_triggered = True
                         if pnl_pct > 0:
-                            exit_reason = f"Time limit reached ({time_in_trade/390:.1f} trading days) - exit with profit of {pnl_pct*100:.2f}%" if data_interval == "daily" else f"Time limit reached ({time_in_trade:.0f} min) - exit with profit"
+                            exit_reason = f"Maximum hold time reached ({time_in_trade/390:.1f} trading days) - exit with {pnl_pct*100:.2f}% profit" if data_interval == "daily" else f"Maximum hold time reached ({time_in_trade:.0f} min) - exit with {pnl_pct*100:.2f}% profit"
                         else:
-                            exit_reason = f"Time limit reached ({time_in_trade/390:.1f} trading days) - exit to prevent further loss" if data_interval == "daily" else f"Time limit reached ({time_in_trade:.0f} min) - exit to prevent further loss"
+                            exit_reason = f"Maximum hold time reached ({time_in_trade/390:.1f} trading days) - exit position" if data_interval == "daily" else f"Maximum hold time reached ({time_in_trade:.0f} min) - exit position"
                     
-                    # Exit 4: Trailing stop - lock in profits
-                    elif pnl_pct >= 0.015 and (current_price < hist['Close'].iloc[i-1] * 0.998):  # 1.5% profit with reversal
-                        exit_triggered = True
-                        exit_reason = f"Trailing stop triggered - locking in {pnl_pct*100:.2f}% profit after seeing reversal"
+                    # Exit 4: Trailing stop - protect profits once up 3%
+                    elif pnl_pct >= 0.03:  # Once up 3%, use trailing stop
+                        # Check if price pulled back 1.5% from recent high
+                        recent_high = hist['Close'].iloc[max(0, i-10):i].max()
+                        if current_price < recent_high * 0.985:  # 1.5% pullback
+                            exit_triggered = True
+                            exit_reason = f"Trailing stop triggered - locking in {pnl_pct*100:.2f}% profit after pullback from recent high ${recent_high:.2f}"
                     
-                    # Exit 5: Momentum reversal with volume
+                    # Exit 5: Strong momentum reversal with volume (only if losing)
                     elif (pnl_pct < 0 and 
-                          current_price < entry_price * 0.995 and 
-                          hist['volume_ratio'].iloc[i] > 1.5 and
-                          hist['price_change'].iloc[i] < -0.003):
+                          current_price < entry_price * 0.993 and 
+                          hist['volume_ratio'].iloc[i] > 1.8 and
+                          hist['price_change'].iloc[i] < -0.005):
                         exit_triggered = True
-                        exit_reason = f"Bearish momentum reversal with high volume - exit to prevent larger loss (currently {pnl_pct*100:.2f}%)"
+                        exit_reason = f"Strong bearish momentum reversal with high volume - exit to prevent larger loss (currently {pnl_pct*100:.2f}%)"
                     
-                    # Exit 6: SMA support/resistance break
-                    elif order_type == "BUY" and current_price < hist['SMA_20'].iloc[i] * 0.997 and pnl_pct < 0:
+                    # Exit 6: Major SMA support/resistance break (only if losing significantly)
+                    elif order_type == "BUY" and current_price < hist['SMA_20'].iloc[i] * 0.993 and pnl_pct < -0.005:
                         exit_triggered = True
-                        exit_reason = f"Price broke below SMA20 support (${hist['SMA_20'].iloc[i]:.2f}) - exit long position"
-                    elif order_type == "SELL SHORT" and current_price > hist['SMA_20'].iloc[i] * 1.003 and pnl_pct < 0:
+                        exit_reason = f"Price broke significantly below SMA20 support (${hist['SMA_20'].iloc[i]:.2f}) - exit long position"
+                    elif order_type == "SELL SHORT" and current_price > hist['SMA_20'].iloc[i] * 1.007 and pnl_pct < -0.005:
                         exit_triggered = True
-                        exit_reason = f"Price broke above SMA20 resistance (${hist['SMA_20'].iloc[i]:.2f}) - cover short position"
+                        exit_reason = f"Price broke significantly above SMA20 resistance (${hist['SMA_20'].iloc[i]:.2f}) - cover short position"
                     
                     if exit_triggered:
                         # Calculate P&L for 10 shares
