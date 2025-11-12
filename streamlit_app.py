@@ -435,8 +435,8 @@ if selected == "Trading Hub":
 # Options Chain
 elif selected == "Options Chain":
     st.header("SPY Options Chain")
-    if option_chain.empty:
-        st.warning("No options data")
+    if option_chain.empty or 'expiration' not in option_chain.columns:
+        st.warning("No options data available. This could be due to market hours or data connectivity.")
     else:
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -447,13 +447,52 @@ elif selected == "Options Chain":
             dte_filter = st.slider("Max DTE", 0, 30, 30)
 
         df = option_chain.copy()
-        if exp_filter:
+        if exp_filter and 'expiration' in df.columns:
             df = df[df['expiration'].isin(exp_filter)]
-        if type_filter:
+        if type_filter and 'type' in df.columns:
             df = df[df['type'].isin(type_filter)]
-        df = df[df['dte'] <= dte_filter]
+        if 'dte' in df.columns:
+            df = df[df['dte'] <= dte_filter]
 
-        st.dataframe(df.drop(columns=['contractSymbol'], errors='ignore'), use_container_width=True, height=500)
+        if not df.empty:
+            st.dataframe(df.drop(columns=['contractSymbol'], errors='ignore'), use_container_width=True, height=500)
+            
+            # Option details section
+            selected_opt = st.selectbox("Select Option for Details", df['symbol'].tolist() if 'symbol' in df.columns else [], key="opt_select")
+            if selected_opt:
+                row = df[df['symbol'] == selected_opt].iloc[0]
+                with st.expander(f"**{row['symbol']}**", expanded=True):
+                    col1, col2 = st.columns(2)
+                    col1.write(f"**Last:** ${row.get('lastPrice', 0):.2f}")
+                    col1.write(f"**Bid/Ask:** ${row.get('bid', 0):.2f} / ${row.get('ask', 0):.2f}")
+                    col1.write(f"**IV:** {row.get('impliedVolatility', 0):.1%}")
+                    col2.write(f"**Delta:** {row.get('delta', 'N/A')}")
+                    col2.write(f"**Gamma:** {row.get('gamma', 'N/A')}")
+                    col2.write(f"**Theta:** {row.get('theta', 'N/A')}")
+                    col2.write(f"**Vega:** {row.get('vega', 'N/A')}")
+
+                    if st.button("Paper Trade", key=f"pt_{selected_opt}"):
+                        now = datetime.now(ZoneInfo("US/Eastern"))
+                        sig_id = f"MAN-{selected_opt}-{now.strftime('%H%M%S')}"
+                        log_trade(
+                            ts=now.strftime("%m/%d %H:%M"),
+                            typ="Open",
+                            sym=row['symbol'],
+                            action="Buy",
+                            size=1,
+                            entry=f"${row.get('mid', 0):.2f}",
+                            exit="Pending",
+                            pnl="Open",
+                            status="Open",
+                            sig_id=sig_id,
+                            entry_numeric=row.get('mid', 0),
+                            dte=row.get('dte', 0),
+                            strategy="Manual Option Trade",
+                            thesis="Manual entry from options chain"
+                        )
+                        st.success("Paper trade opened!")
+        else:
+            st.info("No options match the selected filters.")
 
 # Trade Tracker
 elif selected == "Trade Tracker":
