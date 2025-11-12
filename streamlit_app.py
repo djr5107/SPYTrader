@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 st.set_page_config(page_title=“SPY Pro v2.25”, layout=“wide”)
-st.title(“SPY Pro v2.25 – Wall Street Grade”)
+st.title(“SPY Pro v2.25 - Wall Street Grade”)
 st.caption(“Live Chain | Greeks | Charts | Auto-Paper | Backtest | Schwab Ready | Princeton Meadows”)
 
 # — Persistent Storage Paths —
@@ -103,7 +103,7 @@ market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
 market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
 return now.weekday() < 5 and market_open <= now <= market_close
 
-# — Live Data + Options Chain (DTE ≤ 30) —
+# — Live Data + Options Chain (DTE <= 30) —
 
 @st.cache_data(ttl=30)
 def get_market_data():
@@ -486,7 +486,7 @@ st.plotly_chart(fig, use_container_width=True)
 # — Options Chain —
 
 elif selected == “Options Chain”:
-st.header(“SPY Options Chain – DTE ≤ 30 | Full Greeks | Click for Chart”)
+st.header(“SPY Options Chain - DTE <= 30 | Full Greeks | Click for Chart”)
 if option_chain.empty or ‘expiration’ not in option_chain.columns:
 st.warning(“No options data available.”)
 else:
@@ -553,7 +553,7 @@ dte_filter = st.slider(“Max DTE”, 0, 30, 30)
                         if not opt_hist.empty:
                             fig = go.Figure()
                             fig.add_trace(go.Scatter(x=opt_hist.index, y=opt_hist['Close'], mode='lines', name='Price'))
-                            fig.update_layout(title=f"{row['symbol']} – 30-Day", height=400)
+                            fig.update_layout(title=f"{row['symbol']} - 30-Day", height=400)
                             st.plotly_chart(fig, use_container_width=True)
                         else:
                             st.info("No history.")
@@ -599,7 +599,7 @@ samples = [
 {“Strategy”:“Bull Put Spread”,“Action”:“Sell 660P/655P”,“Size”:“3”,“Credit”:”$1.20”,“Risk”:”$210”,“POP”:“85%”,“Exit”:“EOD”,“Trigger”:“SPY>EMA”,“Thesis”:“Bullish credit”}
 ]
 for s in samples:
-with st.expander(f”**{s[‘Strategy’]}** – {s[‘Action’]}”):
+with st.expander(f”**{s[‘Strategy’]}** - {s[‘Action’]}”):
 col1, col2 = st.columns(2)
 col1.write(f”**Size:** {s[‘Size’]}”); col1.write(f”**Credit:** {s[‘Credit’]}”)
 col1.write(f”**Risk:** {s[‘Risk’]}”); col2.write(f”**POP:** {s[‘POP’]}”)
