@@ -615,6 +615,8 @@ elif selected == "Backtest":
             entry_time = None
             entry_reason = ""
             signal_type = ""
+            security = ""
+            order_type = ""
             
             for i in range(50, len(hist)):
                 current_time = hist.index[i]
@@ -637,19 +639,23 @@ elif selected == "Backtest":
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"High volume spike ({hist['volume_ratio'].iloc[i]:.1f}x avg) with bullish momentum above SMA"
+                        entry_reason = f"High volume spike ({hist['volume_ratio'].iloc[i]:.1f}x avg) with bullish momentum above SMA20 (${hist['SMA_20'].iloc[i]:.2f})"
                         signal_type = "Volume Breakout"
+                        security = "SPY"
+                        order_type = "BUY"
                         continue
                     
-                    # Signal 2: Golden cross pattern (SMA20 crosses above SMA50)
+                    # Signal 2: Golden cross pattern
                     if (hist['SMA_20'].iloc[i] > hist['SMA_50'].iloc[i] and 
                         hist['SMA_20'].iloc[i-1] <= hist['SMA_50'].iloc[i-1] and
                         current_volume > hist['volume_ma'].iloc[i]):
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"SMA20 crossed above SMA50 (golden cross) with volume confirmation"
+                        entry_reason = f"SMA20 (${hist['SMA_20'].iloc[i]:.2f}) crossed above SMA50 (${hist['SMA_50'].iloc[i]:.2f}) - golden cross signal with volume confirmation"
                         signal_type = "Golden Cross"
+                        security = "SPY"
+                        order_type = "BUY"
                         continue
                     
                     # Signal 3: Strong breakout above SMA20
@@ -659,8 +665,10 @@ elif selected == "Backtest":
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"Price broke above SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with strong volume"
+                        entry_reason = f"Price broke above SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with strong volume ({hist['volume_ratio'].iloc[i]:.1f}x average)"
                         signal_type = "SMA Breakout"
+                        security = "SPY"
+                        order_type = "BUY"
                         continue
                     
                     # Signal 4: Oversold bounce
@@ -671,13 +679,36 @@ elif selected == "Backtest":
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
-                        entry_reason = f"Bounce from recent low (${recent_low:.2f}) with volume surge"
+                        entry_reason = f"Bounce from recent 10-period low (${recent_low:.2f}) with volume surge ({hist['volume_ratio'].iloc[i]:.1f}x average)"
                         signal_type = "Reversal Long"
+                        security = "SPY"
+                        order_type = "BUY"
+                        continue
+                    
+                    # Signal 5: Bearish breakdown for SHORT
+                    if (current_price < hist['SMA_20'].iloc[i] * 0.997 and
+                        hist['Close'].iloc[i-1] >= hist['SMA_20'].iloc[i-1] and
+                        hist['volume_ratio'].iloc[i] > 1.5 and
+                        hist['price_change'].iloc[i] < -0.003):
+                        in_position = True
+                        entry_price = current_price
+                        entry_time = current_time
+                        entry_reason = f"Price broke below SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with high volume ({hist['volume_ratio'].iloc[i]:.1f}x) - bearish breakdown"
+                        signal_type = "Bearish Breakdown"
+                        security = "SPY"
+                        order_type = "SELL SHORT"
                         continue
                 
                 else:
                     # Look for exit signals
-                    pnl_pct = (current_price - entry_price) / entry_price
+                    if order_type == "BUY":
+                        pnl_pct = (current_price - entry_price) / entry_price
+                        pnl_dollars = (current_price - entry_price) * 10  # 10 shares
+                        exit_order = "SELL"
+                    else:  # SELL SHORT
+                        pnl_pct = (entry_price - current_price) / entry_price
+                        pnl_dollars = (entry_price - current_price) * 10  # 10 shares
+                        exit_order = "BUY TO COVER"
                     
                     # Calculate time in trade based on data interval
                     if data_interval == "daily":
@@ -688,46 +719,60 @@ elif selected == "Backtest":
                     exit_triggered = False
                     exit_reason = ""
                     
-                    # Exit 1: Profit target reached
-                    if pnl_pct >= 0.008:  # 0.8% profit
+                    # Exit 1: Profit target reached (2% for better risk/reward)
+                    if pnl_pct >= 0.020:  # 2% profit target
                         exit_triggered = True
-                        exit_reason = f"Profit target reached (+{pnl_pct*100:.2f}%)"
+                        exit_reason = f"Profit target reached (+{pnl_pct*100:.2f}%) - took profit at 2% gain"
                     
-                    # Exit 2: Stop loss hit
-                    elif pnl_pct <= -0.005:  # 0.5% loss
+                    # Exit 2: Stop loss hit (0.75% to give room but protect capital)
+                    elif pnl_pct <= -0.0075:  # 0.75% stop loss
                         exit_triggered = True
-                        exit_reason = f"Stop loss triggered ({pnl_pct*100:.2f}%)"
+                        exit_reason = f"Stop loss triggered ({pnl_pct*100:.2f}%) - cut losses at 0.75%"
                     
-                    # Exit 3: Time-based exit
+                    # Exit 3: Time-based exit (adjusted for better R:R)
                     elif time_in_trade >= 1200:  # ~3 trading days for daily data, ~20 hours for intraday
                         exit_triggered = True
-                        exit_reason = f"Time limit reached ({time_in_trade/390:.1f} trading days)" if data_interval == "daily" else f"Time limit reached ({time_in_trade:.0f} min)"
+                        if pnl_pct > 0:
+                            exit_reason = f"Time limit reached ({time_in_trade/390:.1f} trading days) - exit with profit of {pnl_pct*100:.2f}%" if data_interval == "daily" else f"Time limit reached ({time_in_trade:.0f} min) - exit with profit"
+                        else:
+                            exit_reason = f"Time limit reached ({time_in_trade/390:.1f} trading days) - exit to prevent further loss" if data_interval == "daily" else f"Time limit reached ({time_in_trade:.0f} min) - exit to prevent further loss"
                     
-                    # Exit 4: Bearish reversal with volume
-                    elif (current_price < entry_price * 0.997 and 
+                    # Exit 4: Trailing stop - lock in profits
+                    elif pnl_pct >= 0.015 and (current_price < hist['Close'].iloc[i-1] * 0.998):  # 1.5% profit with reversal
+                        exit_triggered = True
+                        exit_reason = f"Trailing stop triggered - locking in {pnl_pct*100:.2f}% profit after seeing reversal"
+                    
+                    # Exit 5: Momentum reversal with volume
+                    elif (pnl_pct < 0 and 
+                          current_price < entry_price * 0.995 and 
                           hist['volume_ratio'].iloc[i] > 1.5 and
                           hist['price_change'].iloc[i] < -0.003):
                         exit_triggered = True
-                        exit_reason = "Bearish reversal detected with high volume"
+                        exit_reason = f"Bearish momentum reversal with high volume - exit to prevent larger loss (currently {pnl_pct*100:.2f}%)"
                     
-                    # Exit 5: Below SMA support
-                    elif current_price < hist['SMA_20'].iloc[i] * 0.998 and pnl_pct < 0:
+                    # Exit 6: SMA support/resistance break
+                    elif order_type == "BUY" and current_price < hist['SMA_20'].iloc[i] * 0.997 and pnl_pct < 0:
                         exit_triggered = True
-                        exit_reason = f"Price fell below SMA20 support (${hist['SMA_20'].iloc[i]:.2f})"
+                        exit_reason = f"Price broke below SMA20 support (${hist['SMA_20'].iloc[i]:.2f}) - exit long position"
+                    elif order_type == "SELL SHORT" and current_price > hist['SMA_20'].iloc[i] * 1.003 and pnl_pct < 0:
+                        exit_triggered = True
+                        exit_reason = f"Price broke above SMA20 resistance (${hist['SMA_20'].iloc[i]:.2f}) - cover short position"
                     
                     if exit_triggered:
                         # Calculate P&L for 10 shares
                         shares = 10
-                        pnl_dollars = (current_price - entry_price) * shares
                         
                         completed_trades.append({
                             'Entry Date': entry_time.strftime('%m/%d/%Y'),
                             'Entry Time': entry_time.strftime('%I:%M %p') if data_interval != "daily" else "Market Open",
+                            'Security': security,
+                            'Entry Order': order_type,
                             'Signal Type': signal_type,
                             'Entry Price': f"${entry_price:.2f}",
                             'Entry Reason': entry_reason,
                             'Exit Date': current_time.strftime('%m/%d/%Y'),
                             'Exit Time': current_time.strftime('%I:%M %p') if data_interval != "daily" else "Market Close",
+                            'Exit Order': exit_order,
                             'Exit Price': f"${current_price:.2f}",
                             'Exit Reason': exit_reason,
                             'Shares': shares,
@@ -795,23 +840,25 @@ elif selected == "Backtest":
         st.subheader("Detailed Trade Analysis")
         for idx, trade in backtest_df.iterrows():
             pnl_color = "green" if trade['P&L Numeric'] > 0 else "red"
-            with st.expander(f"Trade #{idx+1}: {trade['Signal Type']} - {trade['P&L']} ({trade['P&L %']})", expanded=False):
+            with st.expander(f"Trade #{idx+1}: {trade['Entry Order']} {trade['Security']} - {trade['Signal Type']} - {trade['P&L']} ({trade['P&L %']})", expanded=False):
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    st.markdown("**ENTRY**")
+                    st.markdown("**📈 ENTRY**")
                     st.write(f"📅 Date: {trade['Entry Date']}")
                     st.write(f"🕐 Time: {trade['Entry Time']}")
-                    st.write(f"💰 Price: {trade['Entry Price']}")
-                    st.write(f"📊 Shares: {trade['Shares']}")
+                    st.write(f"🎯 Security: **{trade['Security']}**")
+                    st.write(f"📊 Order: **{trade['Entry Order']}** {trade['Shares']} shares")
+                    st.write(f"💰 Entry Price: {trade['Entry Price']}")
                     st.markdown(f"**Signal:** *{trade['Entry Reason']}*")
                 
                 with col2:
-                    st.markdown("**EXIT**")
+                    st.markdown("**📉 EXIT**")
                     st.write(f"📅 Date: {trade['Exit Date']}")
                     st.write(f"🕐 Time: {trade['Exit Time']}")
-                    st.write(f"💰 Price: {trade['Exit Price']}")
-                    st.write(f"⏱️ Hold: {trade['Hold Time']}")
+                    st.write(f"📊 Order: **{trade['Exit Order']}**")
+                    st.write(f"💰 Exit Price: {trade['Exit Price']}")
+                    st.write(f"⏱️ Hold Time: {trade['Hold Time']}")
                     st.markdown(f"**Reason:** *{trade['Exit Reason']}*")
                 
                 st.markdown(f"**P&L: <span style='color:{pnl_color}; font-size:1.2em;'>{trade['P&L']} ({trade['P&L %']})</span>**", unsafe_allow_html=True)
