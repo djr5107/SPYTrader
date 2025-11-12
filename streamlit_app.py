@@ -574,12 +574,296 @@ elif selected == "Backtest":
     def run_backtest():
         """Run backtest using actual historical SPY data"""
         try:
-            # Get 30 days of minute data
             spy = yf.Ticker("SPY")
-            hist = spy.history(period="30d", interval="1m")
             
-            if hist.empty:
-                return pd.DataFrame(), "No historical data available"
+            # Try to get minute data first (most detailed)
+            hist = None
+            data_interval = None
+            
+            # Try different data granularities
+            attempts = [
+                ("5d", "5m", "5-minute"),
+                ("5d", "15m", "15-minute"),
+                ("1mo", "1h", "hourly"),
+                ("3mo", "1d", "daily"),
+            ]
+            
+            for period, interval, desc in attempts:
+                try:
+                    test_hist = spy.history(period=period, interval=interval)
+                    if not test_hist.empty and len(test_hist) > 50:
+                        hist = test_hist
+                        data_interval = desc
+                        break
+                except:
+                    continue
+            
+            if hist is None or hist.empty:
+                return pd.DataFrame(), "Unable to fetch historical data from yfinance. This may be due to market hours or API limitations. Please try again later."
+            
+            # Calculate technical indicators
+            hist['SMA_20'] = hist['Close'].rolling(window=20).mean()
+            hist['SMA_50'] = hist['Close'].rolling(window=50).mean()
+            hist['volume_ma'] = hist['Volume'].rolling(window=20).mean()
+            hist['volume_ratio'] = hist['Volume'] / hist['volume_ma']
+            hist['price_change'] = hist['Close'].pct_change()
+            
+            # Generate signals based on actual conditions
+            completed_trades = []
+            in_position = False
+            entry_price = 0
+            entry_time = None
+            entry_reason = ""
+            signal_type = ""
+            
+            for i in range(50, len(hist)):
+                current_time = hist.index[i]
+                current_price = hist['Close'].iloc[i]
+                current_volume = hist['Volume'].iloc[i]
+                
+                # For minute/hourly data, skip outside market hours
+                if data_interval in ["5-minute", "15-minute", "hourly"]:
+                    if hasattr(current_time, 'hour'):
+                        if current_time.hour < 9 or (current_time.hour == 9 and current_time.minute < 30) or current_time.hour >= 16:
+                            continue
+                
+                if not in_position:
+                    # Look for entry signals
+                    
+                    # Signal 1: Strong volume spike with momentum
+                    if (hist['volume_ratio'].iloc[i] > 1.8 and 
+                        hist['price_change'].iloc[i] > 0 and
+                        current_price > hist['SMA_20'].iloc[i]):
+                        in_position = True
+                        entry_price = current_price
+                        entry_time = current_time
+                        entry_reason = f"High volume spike ({hist['volume_ratio'].iloc[i]:.1f}x avg) with bullish momentum above SMA"
+                        signal_type = "Volume Breakout"
+                        continue
+                    
+                    # Signal 2: Golden cross pattern (SMA20 crosses above SMA50)
+                    if (hist['SMA_20'].iloc[i] > hist['SMA_50'].iloc[i] and 
+                        hist['SMA_20'].iloc[i-1] <= hist['SMA_50'].iloc[i-1] and
+                        current_volume > hist['volume_ma'].iloc[i]):
+                        in_position = True
+                        entry_price = current_price
+                        entry_time = current_time
+                        entry_reason = f"SMA20 crossed above SMA50 (golden cross) with volume confirmation"
+                        signal_type = "Golden Cross"
+                        continue
+                    
+                    # Signal 3: Strong breakout above SMA20
+                    if (current_price > hist['SMA_20'].iloc[i] * 1.003 and 
+                        hist['Close'].iloc[i-1] <= hist['SMA_20'].iloc[i-1] and
+                        hist['volume_ratio'].iloc[i] > 1.3):
+                        in_position = True
+                        entry_price = current_price
+                        entry_time = current_time
+                        entry_reason = f"Price broke above SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with strong volume"
+                        signal_type = "SMA Breakout"
+                        continue
+                    
+                    # Signal 4: Oversold bounce
+                    recent_low = hist['Close'].iloc[i-10:i].min()
+                    if (current_price < recent_low * 1.001 and 
+                        hist['price_change'].iloc[i] > 0.002 and
+                        current_volume > hist['volume_ma'].iloc[i] * 1.5):
+                        in_position = True
+                        entry_price = current_price
+                        entry_time = current_time
+                        entry_reason = f"Bounce from recent low (${recent_low:.2f}) with volume surge"
+                        signal_type = "Reversal Long"
+                        continue
+                
+                else:
+                    # Look for exit signals
+                    pnl_pct = (current_price - entry_price) / entry_price
+                    
+                    # Calculate time in trade based on data interval
+                    if data_interval == "daily":
+                        time_in_trade = (current_time - entry_time).days * 390  # Trading minutes per day
+                    else:
+                        time_in_trade = (current_time - entry_time).total_seconds() / 60
+                    
+                    exit_triggered = False
+                    exit_reason = ""
+                    
+                    # Exit 1: Profit target reached
+                    if pnl_pct >= 0.008:  # 0.8% profit
+                        exit_triggered = True
+                        exit_reason = f"Profit target reached (+{pnl_pct*100:.2f}%)"
+                    
+                    # Exit 2: Stop loss hit
+                    elif pnl_pct <= -0.005:  # 0.5% loss
+                        exit_triggered = True
+                        exit_reason = f"Stop loss triggered ({pnl_pct*100:.2f}%)"
+                    
+                    # Exit 3: Time-based exit
+                    elif time_in_trade >= 1200:  # ~3 trading days for daily data, ~20 hours for intraday
+                        exit_triggered = True
+                        exit_reason = f"Time limit reached ({time_in_trade/390:.1f} trading days)" if data_interval == "daily" else f"Time limit reached ({time_in_trade:.0f} min)"
+                    
+                    # Exit 4: Bearish reversal with volume
+                    elif (current_price < entry_price * 0.997 and 
+                          hist['volume_ratio'].iloc[i] > 1.5 and
+                          hist['price_change'].iloc[i] < -0.003):
+                        exit_triggered = True
+                        exit_reason = "Bearish reversal detected with high volume"
+                    
+                    # Exit 5: Below SMA support
+                    elif current_price < hist['SMA_20'].iloc[i] * 0.998 and pnl_pct < 0:
+                        exit_triggered = True
+                        exit_reason = f"Price fell below SMA20 support (${hist['SMA_20'].iloc[i]:.2f})"
+                    
+                    if exit_triggered:
+                        # Calculate P&L for 10 shares
+                        shares = 10
+                        pnl_dollars = (current_price - entry_price) * shares
+                        
+                        completed_trades.append({
+                            'Entry Date': entry_time.strftime('%m/%d/%Y'),
+                            'Entry Time': entry_time.strftime('%I:%M %p') if data_interval != "daily" else "Market Open",
+                            'Signal Type': signal_type,
+                            'Entry Price': f"${entry_price:.2f}",
+                            'Entry Reason': entry_reason,
+                            'Exit Date': current_time.strftime('%m/%d/%Y'),
+                            'Exit Time': current_time.strftime('%I:%M %p') if data_interval != "daily" else "Market Close",
+                            'Exit Price': f"${current_price:.2f}",
+                            'Exit Reason': exit_reason,
+                            'Shares': shares,
+                            'Hold Time': f"{time_in_trade/390:.1f} days" if data_interval == "daily" else f"{time_in_trade:.0f} min",
+                            'P&L': f"${pnl_dollars:.2f}",
+                            'P&L %': f"{pnl_pct*100:.2f}%",
+                            'Entry Price Numeric': entry_price,
+                            'Exit Price Numeric': current_price,
+                            'P&L Numeric': pnl_dollars
+                        })
+                        
+                        in_position = False
+                        
+                        # Stop after 10 completed trades
+                        if len(completed_trades) >= 10:
+                            break
+            
+            if not completed_trades:
+                return pd.DataFrame(), f"No completed trades found using {data_interval} data. Try adjusting signal parameters or check back when more trading activity occurs."
+            
+            result_df = pd.DataFrame(completed_trades)
+            return result_df, None
+            
+        except Exception as e:
+            return pd.DataFrame(), f"Backtest error: {str(e)}"
+    
+    # Run the backtest
+    with st.spinner("Running backtest on historical data..."):
+        backtest_df, error = run_backtest()
+    
+    if error:
+        st.error(error)
+        st.info("💡 Tip: The backtest uses real-time yfinance data. If you're seeing this error, it may be due to:")
+        st.write("- Market being closed")
+        st.write("- API rate limits")
+        st.write("- Network connectivity")
+        st.write("Try refreshing the page in a few minutes.")
+    elif backtest_df.empty:
+        st.warning("No trades generated from backtest")
+    else:
+        # Summary metrics
+        total_pnl = backtest_df['P&L Numeric'].sum()
+        win_count = (backtest_df['P&L Numeric'] > 0).sum()
+        loss_count = (backtest_df['P&L Numeric'] < 0).sum()
+        win_rate = (win_count / len(backtest_df) * 100) if len(backtest_df) > 0 else 0
+        avg_win = backtest_df[backtest_df['P&L Numeric'] > 0]['P&L Numeric'].mean() if win_count > 0 else 0
+        avg_loss = backtest_df[backtest_df['P&L Numeric'] < 0]['P&L Numeric'].mean() if loss_count > 0 else 0
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Total Trades", len(backtest_df))
+        col2.metric("Total P&L", f"${total_pnl:.2f}", delta=f"{total_pnl:.2f}")
+        col3.metric("Win Rate", f"{win_rate:.1f}%")
+        col4.metric("Avg Win", f"${avg_win:.2f}")
+        col5.metric("Avg Loss", f"${avg_loss:.2f}")
+        
+        # Display trades
+        st.subheader("Trade Details")
+        
+        # Create display dataframe without numeric columns
+        display_df = backtest_df.drop(columns=['Entry Price Numeric', 'Exit Price Numeric', 'P&L Numeric'])
+        
+        st.dataframe(display_df, use_container_width=True, height=400)
+        
+        # Individual trade expandable details
+        st.subheader("Detailed Trade Analysis")
+        for idx, trade in backtest_df.iterrows():
+            pnl_color = "green" if trade['P&L Numeric'] > 0 else "red"
+            with st.expander(f"Trade #{idx+1}: {trade['Signal Type']} - {trade['P&L']} ({trade['P&L %']})", expanded=False):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**ENTRY**")
+                    st.write(f"📅 Date: {trade['Entry Date']}")
+                    st.write(f"🕐 Time: {trade['Entry Time']}")
+                    st.write(f"💰 Price: {trade['Entry Price']}")
+                    st.write(f"📊 Shares: {trade['Shares']}")
+                    st.markdown(f"**Signal:** *{trade['Entry Reason']}*")
+                
+                with col2:
+                    st.markdown("**EXIT**")
+                    st.write(f"📅 Date: {trade['Exit Date']}")
+                    st.write(f"🕐 Time: {trade['Exit Time']}")
+                    st.write(f"💰 Price: {trade['Exit Price']}")
+                    st.write(f"⏱️ Hold: {trade['Hold Time']}")
+                    st.markdown(f"**Reason:** *{trade['Exit Reason']}*")
+                
+                st.markdown(f"**P&L: <span style='color:{pnl_color}; font-size:1.2em;'>{trade['P&L']} ({trade['P&L %']})</span>**", unsafe_allow_html=True)
+        
+        # Download option
+        st.download_button(
+            "📥 Download Backtest Results",
+            display_df.to_csv(index=False),
+            "backtest_results.csv",
+            "text/csv"
+        )
+        
+        # Analysis insights
+        st.subheader("📊 Backtest Insights")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Signal Type Performance**")
+            signal_perf = backtest_df.groupby('Signal Type')['P&L Numeric'].agg(['count', 'sum', 'mean']).round(2)
+            signal_perf.columns = ['Trades', 'Total P&L', 'Avg P&L']
+            st.dataframe(signal_perf, use_container_width=True)
+        
+        with col2:
+            st.markdown("**Exit Reason Analysis**")
+            # Extract primary exit reason (first part before parenthesis)
+            backtest_df['Exit Type'] = backtest_df['Exit Reason'].str.split('(').str[0].str.strip()
+            exit_analysis = backtest_df.groupby('Exit Type')['P&L Numeric'].agg(['count', 'mean']).round(2)
+            exit_analysis.columns = ['Count', 'Avg P&L']
+            st.dataframe(exit_analysis, use_container_width=True)
+        
+        # P&L Chart
+        st.subheader("Cumulative P&L")
+        backtest_df['Cumulative P&L'] = backtest_df['P&L Numeric'].cumsum()
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=list(range(1, len(backtest_df) + 1)),
+            y=backtest_df['Cumulative P&L'],
+            mode='lines+markers',
+            name='Cumulative P&L',
+            line=dict(color='green' if total_pnl > 0 else 'red', width=2),
+            marker=dict(size=8)
+        ))
+        fig.update_layout(
+            title="Cumulative P&L Over Last 10 Trades",
+            xaxis_title="Trade Number",
+            yaxis_title="Cumulative P&L ($)",
+            height=400,
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig, use_container_width=True)
             
             # Calculate technical indicators
             hist['SMA_20'] = hist['Close'].rolling(window=20).mean()
