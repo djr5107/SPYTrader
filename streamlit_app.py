@@ -859,6 +859,64 @@ def get_options_chain(symbol="SPY", dte_min=7, dte_max=60):
         return pd.DataFrame()
 
 # ==============================
+# HELPER FUNCTIONS
+# ==============================
+
+def display_backtest_results(trades_df, ticker_name):
+    """Display results for single ticker backtest"""
+    # Overall metrics
+    total_pnl = trades_df['P&L'].sum()
+    wins = len(trades_df[trades_df['P&L'] > 0])
+    losses = len(trades_df[trades_df['P&L'] <= 0])
+    win_rate = (wins / len(trades_df) * 100) if len(trades_df) > 0 else 0
+    avg_win = trades_df[trades_df['P&L'] > 0]['P&L'].mean() if wins > 0 else 0
+    avg_loss = trades_df[trades_df['P&L'] <= 0]['P&L'].mean() if losses > 0 else 0
+    
+    # Calculate capital at risk
+    trades_df['Capital_At_Risk'] = trades_df['Entry Price'] * trades_df['Shares']
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total P&L", f"${total_pnl:,.0f}")
+    col2.metric("Trades", len(trades_df))
+    col3.metric("Win Rate", f"{win_rate:.1f}%")
+    col4.metric("Avg Win", f"${avg_win:.0f}")
+    col5.metric("Avg Loss", f"${avg_loss:.0f}")
+    
+    # Conviction Analysis
+    st.subheader("Conviction Score Analysis")
+    conviction_stats = trades_df.groupby('Conviction').agg({
+        'P&L': ['count', 'sum', 'mean'],
+        'P&L %': 'mean',
+        'Days Held': 'mean',
+        'Capital_At_Risk': 'mean'
+    }).round(2)
+    conviction_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %', 'Avg Days Held', 'Avg Capital at Risk']
+    st.dataframe(conviction_stats, use_container_width=True)
+    
+    # Signal Type Analysis
+    st.subheader("Signal Type Performance")
+    signal_stats = trades_df.groupby('Signal Type').agg({
+        'P&L': ['count', 'sum', 'mean'],
+        'P&L %': 'mean'
+    }).round(2)
+    signal_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %']
+    st.dataframe(signal_stats, use_container_width=True)
+    
+    # Trade Log
+    st.subheader("Trade Log")
+    display_cols = ['Entry Date', 'Exit Date', 'Signal Type', 'Conviction', 'Shares', 
+                   'Entry Price', 'Exit Price', 'P&L', 'P&L %', 'Capital_At_Risk', 'Days Held', 'Exit Reason', 'Thesis']
+    st.dataframe(trades_df[display_cols], use_container_width=True, height=400)
+    
+    # Download
+    st.download_button(
+        "Download Backtest Results",
+        trades_df.to_csv(index=False),
+        f"{ticker_name}_backtest_results.csv",
+        "text/csv"
+    )
+
+# ==============================
 # MAIN APP PAGES
 # ==============================
 
@@ -1962,60 +2020,6 @@ elif selected == "Backtest":
                 )
             else:
                 st.info("No trades generated across any tickers in backtest period.")
-
-def display_backtest_results(trades_df, ticker_name):
-    """Display results for single ticker backtest"""
-    # Overall metrics
-    total_pnl = trades_df['P&L'].sum()
-    wins = len(trades_df[trades_df['P&L'] > 0])
-    losses = len(trades_df[trades_df['P&L'] <= 0])
-    win_rate = (wins / len(trades_df) * 100) if len(trades_df) > 0 else 0
-    avg_win = trades_df[trades_df['P&L'] > 0]['P&L'].mean() if wins > 0 else 0
-    avg_loss = trades_df[trades_df['P&L'] <= 0]['P&L'].mean() if losses > 0 else 0
-    
-    # Calculate capital at risk
-    trades_df['Capital_At_Risk'] = trades_df['Entry Price'] * trades_df['Shares']
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Total P&L", f"${total_pnl:,.0f}")
-    col2.metric("Trades", len(trades_df))
-    col3.metric("Win Rate", f"{win_rate:.1f}%")
-    col4.metric("Avg Win", f"${avg_win:.0f}")
-    col5.metric("Avg Loss", f"${avg_loss:.0f}")
-    
-    # Conviction Analysis
-    st.subheader("Conviction Score Analysis")
-    conviction_stats = trades_df.groupby('Conviction').agg({
-        'P&L': ['count', 'sum', 'mean'],
-        'P&L %': 'mean',
-        'Days Held': 'mean',
-        'Capital_At_Risk': 'mean'
-    }).round(2)
-    conviction_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %', 'Avg Days Held', 'Avg Capital at Risk']
-    st.dataframe(conviction_stats, use_container_width=True)
-    
-    # Signal Type Analysis
-    st.subheader("Signal Type Performance")
-    signal_stats = trades_df.groupby('Signal Type').agg({
-        'P&L': ['count', 'sum', 'mean'],
-        'P&L %': 'mean'
-    }).round(2)
-    signal_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %']
-    st.dataframe(signal_stats, use_container_width=True)
-    
-    # Trade Log
-    st.subheader("Trade Log")
-    display_cols = ['Entry Date', 'Exit Date', 'Signal Type', 'Conviction', 'Shares', 
-                   'Entry Price', 'Exit Price', 'P&L', 'P&L %', 'Capital_At_Risk', 'Days Held', 'Exit Reason', 'Thesis']
-    st.dataframe(trades_df[display_cols], use_container_width=True, height=400)
-    
-    # Download
-    st.download_button(
-        "Download Backtest Results",
-        trades_df.to_csv(index=False),
-        f"{ticker_name}_backtest_results.csv",
-        "text/csv"
-    )
 
 elif selected == "Sample Trades":
     st.header("Sample Trade Scenarios")
