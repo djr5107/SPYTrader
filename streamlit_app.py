@@ -555,10 +555,10 @@ def simulate_exit():
             minutes_held = (now - trade['entry_time']).total_seconds() / 60
             
             if 'SELL SHORT' in trade['action'] or 'Short' in trade.get('strategy', ''):
-                pnl = (entry_price - exit_price) * trade['size'] * 100
+                pnl = (entry_price - exit_price) * trade['size']
                 close_action = 'Buy to Cover'
             else:
-                pnl = (exit_price - entry_price) * trade['size'] * 100
+                pnl = (exit_price - entry_price) * trade['size']
                 close_action = 'Sell'
             
             log_trade(
@@ -724,10 +724,10 @@ if selected == "Trading Hub":
             entry_price = trade['entry_price']
             
             if 'SELL SHORT' in trade['action'] or 'Short' in trade.get('strategy', ''):
-                pnl = (entry_price - current_price) * trade['size'] * 100
+                pnl = (entry_price - current_price) * trade['size']
                 pnl_pct = ((entry_price - current_price) / entry_price) * 100
             else:
-                pnl = (current_price - entry_price) * trade['size'] * 100
+                pnl = (current_price - entry_price) * trade['size']
                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
             
             minutes_held = (datetime.now(ZoneInfo("US/Eastern")) - trade['entry_time']).total_seconds() / 60
@@ -1055,11 +1055,17 @@ elif selected == "Options Chain":
             df['Distance'] = ((df['strike'] - current_price) / current_price * 100).round(2)
             df['POP'] = (df['impliedVolatility'] * 100).round(0)
             
+            # Define columns to display (only those that exist)
+            display_cols = ['symbol', 'type', 'strike', 'lastPrice', 'bid', 'ask', 'mid', 
+                           'volume', 'openInterest', 'impliedVolatility', 'delta', 'gamma', 
+                           'theta', 'vega', 'dte', 'Distance', 'POP']
+            
+            # Filter to only existing columns
+            available_cols = [col for col in display_cols if col in df.columns]
+            
             # Display
             st.dataframe(
-                df[['symbol', 'type', 'strike', 'lastPrice', 'bid', 'ask', 'mid', 
-                    'volume', 'openInterest', 'impliedVolatility', 'delta', 'gamma', 
-                    'theta', 'vega', 'dte', 'Distance', 'POP']],
+                df[available_cols],
                 use_container_width=True,
                 height=500
             )
@@ -1123,13 +1129,13 @@ elif selected == "Backtest":
                             max_gain = 0
                             continue
                     
-                    # SMA Breakout - 8/10 conviction
+                    # SMA Breakout - 8/10 conviction (RELAXED THRESHOLDS)
                     if ('SMA_20' in hist.columns and 'SMA_50' in hist.columns and
                         'Volume_Ratio' in hist.columns):
-                        if (current_price > hist['SMA_20'].iloc[i] * 1.005 and
+                        if (current_price > hist['SMA_20'].iloc[i] * 1.002 and  # Reduced from 1.005 to 1.002
                             hist['SMA_20'].iloc[i] > hist['SMA_50'].iloc[i] and
-                            hist['Volume_Ratio'].iloc[i] > 1.5 and
-                            hist['Close'].pct_change().iloc[i] > 0.003):
+                            hist['Volume_Ratio'].iloc[i] > 1.2 and  # Reduced from 1.5 to 1.2
+                            hist['Close'].pct_change().iloc[i] > 0.001):  # Reduced from 0.003 to 0.001
                             in_position = True
                             entry_price = current_price
                             entry_time = current_time
@@ -1140,10 +1146,10 @@ elif selected == "Backtest":
                             max_gain = 0
                             continue
                     
-                    # Volume Breakout - 7/10 conviction
+                    # Volume Breakout - 7/10 conviction (RELAXED THRESHOLDS)
                     if 'Volume_Ratio' in hist.columns and 'SMA_20' in hist.columns:
-                        if (hist['Volume_Ratio'].iloc[i] > 2.0 and
-                            hist['Close'].pct_change().iloc[i] > 0.005 and
+                        if (hist['Volume_Ratio'].iloc[i] > 1.5 and  # Reduced from 2.0 to 1.5
+                            hist['Close'].pct_change().iloc[i] > 0.003 and  # Reduced from 0.005 to 0.003
                             current_price > hist['SMA_20'].iloc[i]):
                             in_position = True
                             entry_price = current_price
@@ -1155,11 +1161,11 @@ elif selected == "Backtest":
                             max_gain = 0
                             continue
                     
-                    # Oversold Bounce - 6/10 conviction
+                    # Oversold Bounce - 6/10 conviction (RELAXED THRESHOLDS)
                     if 'RSI' in hist.columns and 'Stoch_%K' in hist.columns:
-                        if (hist['RSI'].iloc[i] < 30 and
-                            hist['Stoch_%K'].iloc[i] < 20 and
-                            hist['Close'].pct_change().iloc[i] > 0.002):
+                        if (hist['RSI'].iloc[i] < 35 and  # Increased from 30 to 35
+                            hist['Stoch_%K'].iloc[i] < 25 and  # Increased from 20 to 25
+                            hist['Close'].pct_change().iloc[i] > 0.001):  # Reduced from 0.002 to 0.001
                             in_position = True
                             entry_price = current_price
                             entry_time = current_time
@@ -1167,6 +1173,22 @@ elif selected == "Backtest":
                             shares = 12
                             signal_type = "Oversold Bounce"
                             entry_reason = f"Oversold reversal signal"
+                            max_gain = 0
+                            continue
+                    
+                    # Mean Reversion (Bollinger Band Bounce) - 7/10 conviction (NEW SIGNAL)
+                    if ('BB_Lower' in hist.columns and 'BB_Middle' in hist.columns and
+                        'RSI' in hist.columns):
+                        if (current_price <= hist['BB_Lower'].iloc[i] * 1.01 and  # Price at or below lower band
+                            hist['RSI'].iloc[i] < 40 and  # Oversold but not extreme
+                            hist['Close'].pct_change().iloc[i] > 0):  # Starting to bounce
+                            in_position = True
+                            entry_price = current_price
+                            entry_time = current_time
+                            conviction = 7
+                            shares = 15
+                            signal_type = "Mean Reversion"
+                            entry_reason = f"Bollinger Band bounce from lower band"
                             max_gain = 0
                             continue
                 
@@ -1204,7 +1226,7 @@ elif selected == "Backtest":
                     
                     if exit_triggered:
                         exit_price = current_price
-                        pnl = (exit_price - entry_price) * shares * 100
+                        pnl = (exit_price - entry_price) * shares
                         days_held = (current_time - entry_time).days
                         
                         completed_trades.append({
@@ -1228,7 +1250,7 @@ elif selected == "Backtest":
             # Close any remaining position
             if in_position:
                 exit_price = hist['Close'].iloc[-1]
-                pnl = (exit_price - entry_price) * shares * 100
+                pnl = (exit_price - entry_price) * shares
                 gain_pct = ((exit_price - entry_price) / entry_price) * 100
                 days_held = (hist.index[-1] - entry_time).days
                 
