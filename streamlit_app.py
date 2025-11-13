@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 
 # V2.35 Enhancement: Macro Analysis and Dynamic Risk Management
 # V2 - CORRECTED: Proper trailing stop logic and new exit rules
-from macro_analysis_v2 import (
+from macro_analysis_CORRECTED import (
     MacroAnalyzer,
     calculate_dynamic_stop_loss,
     calculate_trailing_stop,
@@ -25,9 +25,9 @@ from macro_analysis_v2 import (
     calculate_position_size
 )
 
-st.set_page_config(page_title="SPY Pro v2.35-V2", layout="wide")
-st.title("SPY Pro v2.35-V2 - Corrected Exit Logic")
-st.caption("Let Winners Run! | -5% Max Loss | +10% Min Target | Wider Trailing Stops")
+st.set_page_config(page_title="SPY Pro v2.36", layout="wide")
+st.title("SPY Pro v2.36 - Signal Generation Fixed")
+st.caption("Active Signals! | Vol Spike Trading | -5% Max Loss | +10% Min Target")
 
 # Persistent Storage Paths
 DATA_DIR = Path("trading_data")
@@ -150,11 +150,12 @@ with st.sidebar:
     st.caption("• Min Target: +10% before exit")
     st.caption("• Wider trailing stops (let winners run)")
     st.caption("• Trail: 2.5% @ +10%, 5% @ +20%, 7.5% @ +30%")
+    st.caption("**V2.36: Signal fixes for volatile markets**")
     
     ENABLE_MACRO_FILTER = st.toggle("Macro Signal Filter", value=True)
-    MIN_CONVICTION = st.slider("Min Conviction", 1, 10, 6)
+    MIN_CONVICTION = st.slider("Min Conviction", 1, 10, 5)  # Changed default from 6 to 5
     USE_DYNAMIC_STOPS = st.toggle("Dynamic Stop Loss", value=True)
-    DISABLE_MEAN_REVERSION = st.toggle("Disable Mean Reversion", value=True)
+    DISABLE_MEAN_REVERSION = st.toggle("Disable Mean Reversion", value=False)  # Changed default to False
 
 # Market Hours
 def is_market_open():
@@ -348,12 +349,27 @@ def generate_signal():
     now = datetime.now(ZoneInfo("US/Eastern"))
     now_str = now.strftime("%m/%d %H:%M")
     
-    if not is_market_open() or any(s['time'] == now_str for s in st.session_state.signal_queue):
+    # V2.36: Only check market hours, allow multiple signals per minute during volatility
+    if not is_market_open():
         return
     
     # V2.35: Fetch current macro regime for signal filtering
     try:
         regime = st.session_state.macro_analyzer.detect_regime()
+        
+        # V2.36: Check if VIX is elevated - prioritize SVXY signals during volatility
+        try:
+            vix = yf.Ticker("^VIX")
+            vix_current = vix.history(period="1d")['Close'].iloc[-1]
+            vix_elevated = vix_current > 20  # VIX above 20 = elevated volatility
+            
+            # During vol spikes, allow SVXY signals even in RISK_OFF regime
+            if vix_elevated and 'SVXY' in regime.get('avoid_tickers', []):
+                regime['avoid_tickers'] = [t for t in regime['avoid_tickers'] if t != 'SVXY']
+                regime['conviction_boost'] += 1  # Extra boost for vol trades
+        except:
+            vix_elevated = False
+            
     except:
         # Fallback if macro data unavailable
         regime = {
@@ -402,8 +418,9 @@ def generate_signal():
             
             signal = None
             
-            # V2.35: SVXY SPECIAL LOGIC - Mean reversion (can be disabled)
-            if ticker == "SVXY" and len(df) >= 5 and not DISABLE_MEAN_REVERSION:
+            # V2.36: SVXY VOL SPIKE RECOVERY - This is NOT mean reversion, it's volatility trading!
+            # Always runs regardless of mean reversion toggle
+            if ticker == "SVXY" and len(df) >= 5:
                 # SVXY drops when VIX spikes - this is a buying opportunity
                 five_day_drop = ((current_price - df['Close'].iloc[-6]) / df['Close'].iloc[-6]) * 100
                 
@@ -778,11 +795,10 @@ def generate_signal():
                         signal['size'] = calculate_position_size(signal)
                         signal['action'] = f"BUY {signal['size']} shares @ ${signal['entry_price']:.2f}"
                     
-                    # Add signal with probability filter (about 10% chance to avoid spam)
-                    if np.random.random() < 0.10:
-                        st.session_state.signal_queue.append(signal)
-                        save_json(SIGNAL_QUEUE_FILE, st.session_state.signal_queue)
-                        break  # Only one signal per cycle
+                    # V2.36: Add ALL valid signals (removed probability filter for volatile markets)
+                    st.session_state.signal_queue.append(signal)
+                    save_json(SIGNAL_QUEUE_FILE, st.session_state.signal_queue)
+                    break  # Only one signal per cycle
                 
         except Exception as e:
             continue
