@@ -1790,18 +1790,19 @@ elif selected == "Backtest":
                 st.success(f"Backtest Complete: {len(trades_df)} trades")
                 
                 # Display single ticker results
-            # Run backtest
-trades_df, summary = run_enhanced_backtest(backtest_ticker)
-
-# === DISPLAY RESULTS USING OUR FUNCTION ===
-if all_trades:
-            final_df = pd.concat(all_trades, ignore_index=True)
-            final_summary = f"Portfolio Backtest Complete: {len(final_df)} total trades across {len(tickers_to_test)} tickers"
-            if not final_df.empty:
-                display_backtest_results(final_df, final_summary)
+                display_backtest_results(trades_df, backtest_ticker)
             else:
-                st.warning("No trades generated across all tickers.")
-
+                st.info("No trades generated in backtest period.")
+    
+    else:  # Portfolio Mode
+        with st.spinner(f"Running portfolio backtest across {len(tickers_to_test)} tickers..."):
+            all_trades = []
+            
+            for ticker in tickers_to_test:
+                trades_df, error = run_enhanced_backtest(ticker)
+                if not error and not trades_df.empty:
+                    trades_df['Ticker'] = ticker
+                    all_trades.append(trades_df)
             
             if all_trades:
                 portfolio_df = pd.concat(all_trades, ignore_index=True)
@@ -1962,7 +1963,64 @@ if all_trades:
             else:
                 st.info("No trades generated across any tickers in backtest period.")
 
+def display_backtest_results(trades_df, ticker_name):
+    """Display results for single ticker backtest"""
+    # Overall metrics
+    total_pnl = trades_df['P&L'].sum()
+    wins = len(trades_df[trades_df['P&L'] > 0])
+    losses = len(trades_df[trades_df['P&L'] <= 0])
+    win_rate = (wins / len(trades_df) * 100) if len(trades_df) > 0 else 0
+    avg_win = trades_df[trades_df['P&L'] > 0]['P&L'].mean() if wins > 0 else 0
+    avg_loss = trades_df[trades_df['P&L'] <= 0]['P&L'].mean() if losses > 0 else 0
+    
+    # Calculate capital at risk
+    trades_df['Capital_At_Risk'] = trades_df['Entry Price'] * trades_df['Shares']
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total P&L", f"${total_pnl:,.0f}")
+    col2.metric("Trades", len(trades_df))
+    col3.metric("Win Rate", f"{win_rate:.1f}%")
+    col4.metric("Avg Win", f"${avg_win:.0f}")
+    col5.metric("Avg Loss", f"${avg_loss:.0f}")
+    
+    # Conviction Analysis
+    st.subheader("Conviction Score Analysis")
+    conviction_stats = trades_df.groupby('Conviction').agg({
+        'P&L': ['count', 'sum', 'mean'],
+        'P&L %': 'mean',
+        'Days Held': 'mean',
+        'Capital_At_Risk': 'mean'
+    }).round(2)
+    conviction_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %', 'Avg Days Held', 'Avg Capital at Risk']
+    st.dataframe(conviction_stats, use_container_width=True)
+    
+    # Signal Type Analysis
+    st.subheader("Signal Type Performance")
+    signal_stats = trades_df.groupby('Signal Type').agg({
+        'P&L': ['count', 'sum', 'mean'],
+        'P&L %': 'mean'
+    }).round(2)
+    signal_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %']
+    st.dataframe(signal_stats, use_container_width=True)
+    
+    # Trade Log
+    st.subheader("Trade Log")
+    display_cols = ['Entry Date', 'Exit Date', 'Signal Type', 'Conviction', 'Shares', 
+                   'Entry Price', 'Exit Price', 'P&L', 'P&L %', 'Capital_At_Risk', 'Days Held', 'Exit Reason', 'Thesis']
+    st.dataframe(trades_df[display_cols], use_container_width=True, height=400)
+    
+    # Download
+    st.download_button(
+        "Download Backtest Results",
+        trades_df.to_csv(index=False),
+        f"{ticker_name}_backtest_results.csv",
+        "text/csv"
+    )
 
+# Sample Trades, Trade Tracker, Performance, Glossary, Settings remain similar to original
+# ... (keeping the rest of the pages as in the original file for brevity)
+
+# Sample Trades
 elif selected == "Sample Trades":
     st.header("Sample Trade Scenarios")
     st.markdown("""
@@ -2148,48 +2206,3 @@ elif selected == "Settings":
             st.session_state.active_trades = []
             save_json(ACTIVE_TRADES_FILE, [])
             st.success("Active trades cleared")
-
-def display_backtest_results(results_df, summary):
-    if results_df.empty:
-        st.warning("No trades generated.")
-        st.write(summary)
-        return
-    
-    st.success(summary)
-    
-    total_trades = len(results_df)
-    winning = len(results_df[results_df['P&L'] > 0])
-    losing = total_trades - winning
-    win_rate = (winning / total_trades * 100) if total_trades > 0 else 0
-    total_pnl = results_df['P&L'].sum()
-    avg_win = results_df[results_df['P&L'] > 0]['P&L'].mean() if winning > 0 else 0
-    avg_loss = results_df[results_df['P&L'] < 0]['P&L'].mean() if losing > 0 else 0
-    profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else 0
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Trades", total_trades)
-    col2.metric("Win Rate", f"{win_rate:.1f}%")
-    col3.metric("Total P&L", f"${total_pnl:,.0f}")
-    col4.metric("Profit Factor", f"{profit_factor:.2f}")
-
-    st.subheader("Trade Log")
-    st.dataframe(results_df, use_container_width=True)
-
-    # Equity Curve
-    results_df['Cum P&L'] = results_df['P&L'].cumsum()
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=results_df['Exit Date'],
-        y=results_df['Cum P&L'],
-        mode='lines+markers',
-        name='Equity Curve',
-        line=dict(color='green', width=3)
-    ))
-    fig.update_layout(
-        title="Backtest Equity Curve",
-        xaxis_title="Date",
-        yaxis_title="Cumulative P&L ($)",
-        template="plotly_dark",
-        height=500
-    )
-    st.plotly_chart(fig, use_container_width=True)
