@@ -1,4 +1,6 @@
-# macro_analysis.py - Economic Indicators & Market Regime Detection
+# macro_analysis_v2.py - Economic Indicators & Market Regime Detection
+
+# V2 - Corrected trailing stop logic and improved exit rules
 
 import yfinance as yf
 import pandas as pd
@@ -202,12 +204,16 @@ def calculate_dynamic_stop_loss(current_pnl_pct, conviction, days_held):
 Calculate dynamic stop loss that adapts to current P&L and position characteristics.
 
 ```
-V2.36 Update: Maximum loss threshold is -5% on any trade.
+NEW LOGIC (CORRECTED):
+- Maximum loss allowed: -5% (hard stop)
+- Stop gets TIGHTER (closer to entry) as position gains
+- This prevents giving back too much profit
 
 Key principles:
-1. Maximum loss of -5% on any trade
-2. Looser stops for high conviction (more room to work)
-3. Looser stops for longer holds (don't shake out winners)
+1. Hard stop at -5% maximum loss
+2. As position gains, tighten stop to protect profits
+3. High conviction gets slightly more room
+4. Longer holds get slightly more room
 
 Args:
     current_pnl_pct: Current P&L as percentage
@@ -215,149 +221,138 @@ Args:
     days_held: Number of days position has been held
 
 Returns:
-    Stop loss percentage (negative value, always >= -5%)
+    Stop loss percentage (negative value)
 """
 
-# Base stop loss - maximum -5% loss
-base_stop = -5.0
+# Base stop loss by P&L stage
+# As you gain more, stop gets TIGHTER (less negative) to protect profits
+if current_pnl_pct < 0:
+    # Losing position - use maximum stop
+    base_stop = -5.0
+elif current_pnl_pct < 5.0:
+    # Small gain (0-5%) - still use wide stop
+    base_stop = -5.0
+elif current_pnl_pct < 10.0:
+    # Moderate gain (5-10%) - tighten slightly
+    base_stop = -4.0
+elif current_pnl_pct < 15.0:
+    # Good gain (10-15%) - tighten more
+    base_stop = -3.0
+elif current_pnl_pct < 20.0:
+    # Large gain (15-20%) - tighten further
+    base_stop = -2.0
+else:
+    # Huge gain (20%+) - very tight, protect most profit
+    base_stop = -1.0
 
 # Conviction adjustment
-# Lower conviction = tighter stops (less room for error)
-# Higher conviction = looser stops (more room to work)
-if conviction <= 6:
-    conviction_multiplier = 0.8  # 20% tighter: -5% becomes -4%
-elif conviction >= 9:
-    conviction_multiplier = 1.0  # Full -5%
+# High conviction gets slightly more room (looser stop)
+if conviction >= 9:
+    conviction_multiplier = 1.1  # 10% more room
+elif conviction <= 6:
+    conviction_multiplier = 0.9  # 10% tighter
 else:
-    conviction_multiplier = 0.9  # Slightly tighter: -5% becomes -4.5%
+    conviction_multiplier = 1.0
 
-# Time adjustment - Give longer-held positions more room
-# Prevents being shaken out of long-term winners during normal volatility
-if days_held >= 90:  # 3 months
-    time_multiplier = 1.0  # Full -5%
-elif days_held >= 60:  # 2 months
-    time_multiplier = 0.95  # Slightly tighter
-elif days_held >= 30:  # 1 month
-    time_multiplier = 0.9  # Tighter
+# Time adjustment - Longer holds get slightly more room
+if days_held >= 90:
+    time_multiplier = 1.15  # 15% more room
+elif days_held >= 60:
+    time_multiplier = 1.1   # 10% more room
+elif days_held >= 30:
+    time_multiplier = 1.05  # 5% more room
 else:
-    time_multiplier = 0.85  # Tightest for new positions: -5% becomes -4.25%
+    time_multiplier = 1.0
 
 # Calculate final stop
 dynamic_stop = base_stop * conviction_multiplier * time_multiplier
 
-# Ensure we never exceed -5% loss
-dynamic_stop = max(-5.0, dynamic_stop)
+# Ensure reasonable bounds
+# Never tighter than -0.5% (too tight)
+# Never looser than -6% (too risky)
+dynamic_stop = max(-6.0, min(-0.5, dynamic_stop))
 
 return dynamic_stop
 ```
 
 def calculate_trailing_stop(current_pnl_pct, max_gain_pct):
 “””
-Calculate trailing stop distance based on current gain level.
+CORRECTED TRAILING STOP LOGIC
 
 ```
-V2.36 Logic: WIDER trailing stops for bigger winners (let them run!)
+Calculate how far behind the trailing stop should be.
+The FURTHER you're winning, the MORE room you give (wider trail).
 
-Key principle: The more a position has gained, the wider the trailing stop.
-This allows big winners to continue running without getting shaken out by normal volatility.
+Example:
+- At +10% gain: Trail by 2.5% → Exit if drops to +7.5%
+- At +20% gain: Trail by 5.0% → Exit if drops to +15%
+- At +30% gain: Trail by 7.5% → Exit if drops to +22.5%
 
-Examples:
-- At +10% gain: Trail by 2.5%, so exit if drops to +7.5%
-- At +20% gain: Trail by 5%, so exit if drops to +15%
-- At +30% gain: Trail by 7.5%, so exit if drops to +22.5%
-
-Args:
-    current_pnl_pct: Current P&L percentage
-    max_gain_pct: Maximum gain achieved (peak)
-
-Returns:
-    Dictionary with:
-    - trailing_distance: How far back to trail (positive number)
-    - exit_at_pct: The actual exit point percentage
-    - should_exit: Boolean if current position has fallen enough to exit
-"""
-
-# Determine trailing distance based on peak gain level
-if max_gain_pct >= 30.0:
-    trailing_distance = 7.5  # 7.5% trailing at huge gains
-elif max_gain_pct >= 25.0:
-    trailing_distance = 6.0  # 6% trailing
-elif max_gain_pct >= 20.0:
-    trailing_distance = 5.0  # 5% trailing at 20%+
-elif max_gain_pct >= 15.0:
-    trailing_distance = 4.0  # 4% trailing
-elif max_gain_pct >= 10.0:
-    trailing_distance = 2.5  # 2.5% trailing at 10%+
-else:
-    # Below 10% gain - no trailing stop yet, wait for 10% target
-    return {
-        'trailing_distance': 0,
-        'exit_at_pct': None,
-        'should_exit': False
-    }
-
-# Calculate where the trailing stop sits
-exit_at_pct = max_gain_pct - trailing_distance
-
-# Check if current position has fallen enough to trigger exit
-should_exit = current_pnl_pct <= exit_at_pct
-
-return {
-    'trailing_distance': trailing_distance,
-    'exit_at_pct': exit_at_pct,
-    'should_exit': should_exit
-}
-```
-
-def should_exit_for_target(current_pnl_pct, max_gain_pct):
-“””
-V2.36: Determine if position should exit based on target return logic.
-
-```
-Rules:
-1. Don't exit until at least +10% return (let winners develop)
-2. Once above +10%, use trailing stops to lock in gains
-3. Always respect -5% stop loss
+This lets big winners run and only exits on significant reversals.
 
 Args:
     current_pnl_pct: Current P&L percentage
     max_gain_pct: Maximum gain achieved
 
 Returns:
-    Dictionary with exit decision and reason
+    Trailing stop distance (positive value representing how far behind)
 """
 
-# Check for stop loss violation (-5%)
-if current_pnl_pct <= -5.0:
-    return {
-        'should_exit': True,
-        'reason': 'Stop Loss (-5%)',
-        'exit_type': 'loss'
-    }
-
-# Below +10% - don't exit, let position develop
 if max_gain_pct < 10.0:
-    return {
-        'should_exit': False,
-        'reason': 'Below +10% target, holding',
-        'exit_type': None
-    }
+    # Haven't hit minimum target yet - no trailing stop
+    return None
+elif max_gain_pct < 15.0:
+    # 10-15% gain: Trail by 2.5%
+    return 2.5
+elif max_gain_pct < 20.0:
+    # 15-20% gain: Trail by 3.5%
+    return 3.5
+elif max_gain_pct < 25.0:
+    # 20-25% gain: Trail by 5.0%
+    return 5.0
+elif max_gain_pct < 30.0:
+    # 25-30% gain: Trail by 6.0%
+    return 6.0
+else:
+    # 30%+ gain: Trail by 7.5% (let massive winners run!)
+    return 7.5
+```
 
-# Above +10% - check trailing stop
-trailing_info = calculate_trailing_stop(current_pnl_pct, max_gain_pct)
+def check_exit_conditions(current_pnl_pct, max_gain_pct, conviction, days_held):
+“””
+NEW EXIT RULES:
+1. Maximum loss: -5% (hard stop)
+2. Minimum target: +10% (don’t exit winners until they hit this)
+3. Trailing stop only activates after +10% gain
+4. Trailing stop gets WIDER as gains increase (let winners run)
 
-if trailing_info['should_exit']:
-    return {
-        'should_exit': True,
-        'reason': f"Trailing Stop (peaked at +{max_gain_pct:.1f}%, trail={trailing_info['trailing_distance']:.1f}%)",
-        'exit_type': 'profit_protection'
-    }
+```
+Returns:
+    (should_exit, exit_reason) tuple
+"""
 
-return {
-    'should_exit': False,
-    'reason': f"Above +10% target, trailing at {trailing_info['trailing_distance']:.1f}%",
-    'exit_type': None
-}
+# Rule 1: Hard stop at -5% loss
+if current_pnl_pct <= -5.0:
+    return (True, "Stop Loss (-5.0%)")
+
+# Rule 2: Don't exit winners until they hit +10% target
+if 0 < current_pnl_pct < 10.0:
+    # Winning but haven't hit target yet
+    # Only exit if we hit dynamic stop
+    dynamic_stop = calculate_dynamic_stop_loss(current_pnl_pct, conviction, days_held)
+    if current_pnl_pct <= dynamic_stop:
+        return (True, f"Dynamic Stop ({dynamic_stop:.1f}%)")
+    else:
+        return (False, None)  # Hold until +10% target
+
+# Rule 3: Once past +10%, use trailing stop
+if current_pnl_pct >= 10.0:
+    trailing_distance = calculate_trailing_stop(current_pnl_pct, max_gain_pct)
+    
+    if trailing_distance and (max_gain_pct - current_pnl_pct) >= trailing_distance:
+        return (True, f"Trailing Stop (from +{max_gain_pct:.1f}%, trail={trailing_distance:.1f}%)")
+
+return (False, None)
 ```
 
 def detect_drawdown_regime(ticker_history):
