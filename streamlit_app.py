@@ -11,9 +11,20 @@ import json
 from pathlib import Path
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="SPY Pro v2.30", layout="wide")
-st.title("SPY Pro v2.30 - Wall Street Grade")
-st.caption("Multi-Ticker | Enhanced Technicals | MTD/QTD/YTD Charts | Volume Analysis | CMT Grade Indicators")
+# V2.35 Enhancement: Macro Analysis and Dynamic Risk Management
+from macro_analysis import (
+    MacroAnalyzer,
+    calculate_dynamic_stop_loss,
+    detect_drawdown_regime,
+    calculate_recovery_speed,
+    adjust_signal_for_macro,
+    should_take_signal,
+    calculate_position_size
+)
+
+st.set_page_config(page_title="SPY Pro v2.35", layout="wide")
+st.title("SPY Pro v2.35 - Macro-Aware Trading")
+st.caption("Multi-Ticker | Dynamic Stops | Macro Integration | Enhanced Technicals | Volume Analysis")
 
 # Persistent Storage Paths
 DATA_DIR = Path("trading_data")
@@ -76,12 +87,20 @@ if 'performance_metrics' not in st.session_state:
         'daily_pnl': {}
     })
 
+# V2.35: Initialize macro analyzer
+if 'macro_analyzer' not in st.session_state:
+    st.session_state.macro_analyzer = MacroAnalyzer()
+    try:
+        st.session_state.macro_analyzer.fetch_macro_data()
+    except:
+        pass  # Fail gracefully if macro data unavailable
+
 # Sidebar
 with st.sidebar:
     selected = option_menu(
         "Menu",
-        ["Trading Hub", "Options Chain", "Backtest", "Sample Trades", "Trade Tracker", "Performance", "Glossary", "Settings"],
-        icons=["house", "table", "chart-line", "book", "clipboard-data", "graph-up", "book", "gear"],
+        ["Trading Hub", "Options Chain", "Backtest", "Macro Dashboard", "Sample Trades", "Trade Tracker", "Performance", "Glossary", "Settings"],
+        icons=["house", "table", "chart-line", "globe", "book", "clipboard-data", "graph-up", "book", "gear"],
         default_index=0,
     )
     st.divider()
@@ -99,6 +118,34 @@ with st.sidebar:
     TRAILING_STOP_PCT = 1.0  # Updated to 1% for tighter profit locking
     st.caption(f"Stop Loss: {STOP_LOSS_PCT}%")
     st.caption(f"Trailing Stop: {TRAILING_STOP_PCT}%")
+    
+    # V2.35: Market Regime Display
+    st.divider()
+    st.subheader("Market Regime")
+    if st.button("🔄 Refresh Macro"):
+        with st.spinner("Fetching macro data..."):
+            st.session_state.macro_analyzer.fetch_macro_data()
+        st.success("Updated!")
+    
+    try:
+        regime = st.session_state.macro_analyzer.detect_regime()
+        st.caption(f"**{regime['environment']}**")
+        vix_val = st.session_state.macro_analyzer.regime_data.get('vix', 'N/A')
+        if isinstance(vix_val, (int, float)):
+            st.caption(f"VIX: {vix_val:.1f}")
+        else:
+            st.caption(f"VIX: {vix_val}")
+        st.caption(f"Bias: {regime['equity_bias']}")
+    except:
+        st.caption("Regime: Loading...")
+    
+    # V2.35: Feature Toggles
+    st.divider()
+    st.subheader("v2.35 Features")
+    ENABLE_MACRO_FILTER = st.toggle("Macro Signal Filter", value=True)
+    MIN_CONVICTION = st.slider("Min Conviction", 1, 10, 6)
+    USE_DYNAMIC_STOPS = st.toggle("Dynamic Stop Loss", value=True)
+    DISABLE_MEAN_REVERSION = st.toggle("Disable Mean Reversion", value=True)
 
 # Market Hours
 def is_market_open():
@@ -295,6 +342,20 @@ def generate_signal():
     if not is_market_open() or any(s['time'] == now_str for s in st.session_state.signal_queue):
         return
     
+    # V2.35: Fetch current macro regime for signal filtering
+    try:
+        regime = st.session_state.macro_analyzer.detect_regime()
+    except:
+        # Fallback if macro data unavailable
+        regime = {
+            'type': 'NORMAL',
+            'environment': 'Normal Market',
+            'equity_bias': 'BALANCED',
+            'preferred_tickers': TICKERS,
+            'avoid_tickers': [],
+            'conviction_boost': 0
+        }
+    
     # Analyze each ticker for signals
     for ticker in TICKERS:
         try:
@@ -332,8 +393,8 @@ def generate_signal():
             
             signal = None
             
-            # SVXY SPECIAL LOGIC: Buy on volatility spike drops (mean reversion)
-            if ticker == "SVXY" and len(df) >= 5:
+            # V2.35: SVXY SPECIAL LOGIC - Mean reversion (can be disabled)
+            if ticker == "SVXY" and len(df) >= 5 and not DISABLE_MEAN_REVERSION:
                 # SVXY drops when VIX spikes - this is a buying opportunity
                 five_day_drop = ((current_price - df['Close'].iloc[-6]) / df['Close'].iloc[-6]) * 100
                 
@@ -695,11 +756,24 @@ def generate_signal():
                         'signal_type': 'Bearish Breakdown'
                     }
             
-            # Add signal with probability filter (about 10% chance to avoid spam)
-            if signal and np.random.random() < 0.10:
-                st.session_state.signal_queue.append(signal)
-                save_json(SIGNAL_QUEUE_FILE, st.session_state.signal_queue)
-                break  # Only one signal per cycle
+            # V2.35: Apply macro filtering and conviction threshold
+            if signal:
+                # Apply macro-based signal adjustment
+                if ENABLE_MACRO_FILTER:
+                    signal = adjust_signal_for_macro(signal, regime, df)
+                
+                # Check minimum conviction threshold
+                if signal and should_take_signal(signal, MIN_CONVICTION):
+                    # Update position size based on final conviction
+                    if USE_DYNAMIC_STOPS:
+                        signal['size'] = calculate_position_size(signal)
+                        signal['action'] = f"BUY {signal['size']} shares @ ${signal['entry_price']:.2f}"
+                    
+                    # Add signal with probability filter (about 10% chance to avoid spam)
+                    if np.random.random() < 0.10:
+                        st.session_state.signal_queue.append(signal)
+                        save_json(SIGNAL_QUEUE_FILE, st.session_state.signal_queue)
+                        break  # Only one signal per cycle
                 
         except Exception as e:
             continue
@@ -1755,19 +1829,37 @@ elif selected == "Backtest":
                     # Check exit conditions
                     gain_pct = ((current_price - entry_price) / entry_price) * 100
                     max_gain = max(max_gain, gain_pct)
+                    days_held = (current_time - entry_time).days
                     
                     exit_triggered = False
                     exit_reason = ""
                     
-                    # Stop Loss at -2%
-                    if gain_pct <= -2.0:
-                        exit_triggered = True
-                        exit_reason = "Stop Loss (-2%)"
+                    # V2.35: Dynamic Stop Loss (if enabled in settings)
+                    if USE_DYNAMIC_STOPS:
+                        dynamic_stop = calculate_dynamic_stop_loss(gain_pct, conviction, days_held)
+                        if gain_pct <= dynamic_stop:
+                            exit_triggered = True
+                            exit_reason = f"Dynamic Stop ({dynamic_stop:.1f}%)"
+                    else:
+                        # Original fixed stop
+                        if gain_pct <= -2.0:
+                            exit_triggered = True
+                            exit_reason = "Stop Loss (-2%)"
                     
-                    # Trailing Stop after 4% gain (1% trailing)
-                    elif max_gain >= 4.0 and (max_gain - gain_pct) >= 1.0:
-                        exit_triggered = True
-                        exit_reason = f"Trailing Stop (from +{max_gain:.1f}%)"
+                    # V2.35: Progressive Trailing Stop
+                    if not exit_triggered and max_gain >= 5.0:
+                        if gain_pct >= 15.0:
+                            trailing_pct = 1.0  # Very tight at high gains
+                        elif gain_pct >= 10.0:
+                            trailing_pct = 1.5  # Tight
+                        elif gain_pct >= 5.0:
+                            trailing_pct = 2.0  # Moderate
+                        else:
+                            trailing_pct = 3.0  # Wide
+                        
+                        if (max_gain - gain_pct) >= trailing_pct:
+                            exit_triggered = True
+                            exit_reason = f"Trailing Stop (from +{max_gain:.1f}%, trail={trailing_pct:.1f}%)"
                     
                     # Momentum Reversal
                     elif ('Volume_Ratio' in hist.columns and 
@@ -2020,6 +2112,184 @@ elif selected == "Backtest":
                 )
             else:
                 st.info("No trades generated across any tickers in backtest period.")
+
+# V2.35: Macro Dashboard Page
+elif selected == "Macro Dashboard":
+    st.header("📊 Macro Economic Indicators")
+    st.caption("Market regime detection and economic indicator analysis")
+    
+    # Refresh button
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("🔄 Refresh Macro Data"):
+            with st.spinner("Fetching macro indicators..."):
+                try:
+                    st.session_state.macro_analyzer.fetch_macro_data()
+                    st.success("✅ Macro data refreshed!")
+                except Exception as e:
+                    st.error(f"Error fetching data: {str(e)}")
+    
+    st.divider()
+    
+    # Get current regime
+    try:
+        regime = st.session_state.macro_analyzer.detect_regime()
+        
+        # Top-level metrics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Market Regime", regime['environment'])
+            st.caption(regime['description'])
+        
+        with col2:
+            st.metric("Equity Bias", regime['equity_bias'])
+            boost = regime['conviction_boost']
+            st.caption(f"Conviction Adjust: {boost:+d}")
+        
+        with col3:
+            vix_level = st.session_state.macro_analyzer.vix_level
+            st.metric("VIX Level", vix_level)
+            vix_val = st.session_state.macro_analyzer.regime_data.get('vix', 'N/A')
+            if isinstance(vix_val, (int, float)):
+                st.caption(f"Current: {vix_val:.2f}")
+            else:
+                st.caption(f"Current: {vix_val}")
+        
+        st.divider()
+        
+        # Detailed indicators in two columns
+        st.subheader("Detailed Indicators")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📈 Volatility")
+            vix_val = st.session_state.macro_analyzer.regime_data.get('vix', 'N/A')
+            vix_trend = st.session_state.macro_analyzer.regime_data.get('vix_trend', 'N/A')
+            if isinstance(vix_val, (int, float)):
+                st.write(f"**VIX:** {vix_val:.2f}")
+            else:
+                st.write(f"**VIX:** {vix_val}")
+            st.write(f"**Trend:** {vix_trend}")
+            
+            if vix_level == "LOW":
+                st.success("✅ Low volatility - favorable for equities")
+            elif vix_level == "HIGH":
+                st.error("⚠️ High volatility - defensive posture")
+            else:
+                st.info(f"ℹ️ {vix_level} volatility")
+            
+            st.markdown("### 💵 Interest Rates")
+            treasury_10y = st.session_state.macro_analyzer.regime_data.get('treasury_10y', 'N/A')
+            treasury_trend = st.session_state.macro_analyzer.treasury_trend
+            if isinstance(treasury_10y, (int, float)):
+                st.write(f"**10Y Treasury:** {treasury_10y:.2f}%")
+            else:
+                st.write(f"**10Y Treasury:** {treasury_10y}")
+            st.write(f"**Trend:** {treasury_trend}")
+            
+            yield_curve = st.session_state.macro_analyzer.yield_curve_status
+            st.write(f"**Yield Curve:** {yield_curve}")
+            if yield_curve == "INVERTED":
+                st.warning("⚠️ Inverted yield curve - recession signal")
+        
+        with col2:
+            st.markdown("### 🌍 Market Breadth")
+            breadth = st.session_state.macro_analyzer.regime_data.get('breadth', 'N/A')
+            st.write(f"**Status:** {breadth}")
+            
+            if breadth == "BROAD":
+                st.success("✅ Broad participation - healthy market")
+            elif breadth == "NARROW":
+                st.warning("⚠️ Narrow market - limited participation")
+            else:
+                st.info("ℹ️ Partial breadth data available")
+            
+            st.markdown("### 💱 Currency")
+            dollar_trend = st.session_state.macro_analyzer.dollar_trend
+            st.write(f"**Dollar Trend:** {dollar_trend}")
+            
+            dollar_val = st.session_state.macro_analyzer.regime_data.get('dollar', 'N/A')
+            if isinstance(dollar_val, (int, float)):
+                st.write(f"**DXY:** {dollar_val:.2f}")
+            
+            if dollar_trend == "STRONG":
+                st.info("💪 Strong dollar - headwind for international stocks")
+            elif dollar_trend == "WEAK":
+                st.info("📉 Weak dollar - tailwind for international stocks")
+        
+        st.divider()
+        
+        # Trading implications
+        st.subheader("🎯 Trading Implications")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### ✅ Preferred Tickers")
+            st.caption("Focus on these in current regime:")
+            for ticker in regime['preferred_tickers']:
+                st.write(f"✅ **{ticker}**")
+        
+        with col2:
+            if regime['avoid_tickers']:
+                st.markdown("### ⚠️ Avoid / Reduce")
+                st.caption("Lower exposure to these:")
+                for ticker in regime['avoid_tickers']:
+                    st.write(f"⚠️ **{ticker}**")
+            else:
+                st.markdown("### ✅ All Clear")
+                st.caption("No tickers to avoid in current regime")
+        
+        st.divider()
+        
+        # Regime-specific guidance
+        st.subheader("📋 Regime-Specific Guidance")
+        
+        if regime['type'] == "RISK_ON":
+            st.success("""
+            **RISK-ON Environment Detected**
+            - ✅ Favorable conditions for equity longs
+            - ✅ Focus on growth stocks (QQQ priority)
+            - ✅ SVXY can be traded (low volatility)
+            - ✅ Consider higher position sizes
+            - ⚠️ Monitor for regime shift signals
+            """)
+        
+        elif regime['type'] == "RISK_OFF":
+            st.error("""
+            **RISK-OFF Environment Detected**
+            - ⚠️ Defensive posture recommended
+            - ⚠️ Reduce equity exposure
+            - ✅ Focus on bonds (TLT, AGG)
+            - ⚠️ Avoid volatility products (SVXY)
+            - ⚠️ Tighter stops, smaller positions
+            """)
+        
+        elif regime['type'] == "ROTATION":
+            st.warning("""
+            **ROTATION Environment Detected**
+            - ℹ️ Market is transitioning
+            - ℹ️ Be selective with new positions
+            - ✅ Focus on quality (QQQ, SPY only)
+            - ⚠️ Avoid speculative plays (SVXY, EEM)
+            - ℹ️ Wait for clearer regime signal
+            """)
+        
+        else:  # NORMAL
+            st.info("""
+            **NORMAL Market Conditions**
+            - ✅ Balanced approach appropriate
+            - ✅ All tickers viable
+            - ✅ Standard position sizing
+            - ✅ Follow technical signals
+            - ℹ️ Monitor for regime changes
+            """)
+    
+    except Exception as e:
+        st.error(f"Error loading macro dashboard: {str(e)}")
+        st.info("Try refreshing the macro data or check your internet connection.")
 
 elif selected == "Sample Trades":
     st.header("Sample Trade Scenarios")
