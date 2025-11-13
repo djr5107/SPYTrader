@@ -2017,10 +2017,6 @@ def display_backtest_results(trades_df, ticker_name):
         "text/csv"
     )
 
-# Sample Trades, Trade Tracker, Performance, Glossary, Settings remain similar to original
-# ... (keeping the rest of the pages as in the original file for brevity)
-
-# Sample Trades
 elif selected == "Sample Trades":
     st.header("Sample Trade Scenarios")
     st.markdown("""
