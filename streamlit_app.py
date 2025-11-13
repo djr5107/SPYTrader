@@ -96,7 +96,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Trading Parameters")
     STOP_LOSS_PCT = -2.0  # Updated to -2%
-    TRAILING_STOP_PCT = 2.0
+    TRAILING_STOP_PCT = 1.0  # Updated to 1% for tighter profit locking
     st.caption(f"Stop Loss: {STOP_LOSS_PCT}%")
     st.caption(f"Trailing Stop: {TRAILING_STOP_PCT}%")
 
@@ -378,6 +378,112 @@ def generate_signal():
                         'signal_type': 'SVXY Sharp Drop Bounce'
                     }
             
+            # SVXY CASCADE LOGIC: SMA10 crossing through progressively higher SMAs
+            # Each crossover is stronger and signals adding to position
+            if not signal and ticker == "SVXY":
+                # Check which SMAs exist
+                has_sma_10 = 10 in sma_values
+                has_sma_20 = 20 in sma_values
+                has_sma_50 = 50 in sma_values
+                has_sma_100 = 100 in sma_values
+                has_sma_200 = 200 in sma_values
+                
+                # SMA 10 crossing SMA 200 - STRONGEST (9/10) - Full position
+                if has_sma_10 and has_sma_200 and len(df) >= 200:
+                    sma_10 = sma_values[10]
+                    sma_200 = sma_values[200]
+                    sma_10_prev = df['SMA_10'].iloc[-2] if 'SMA_10' in df.columns else 0
+                    sma_200_prev = df['SMA_200'].iloc[-2] if 'SMA_200' in df.columns else 0
+                    
+                    if sma_10 > sma_200 and sma_10_prev <= sma_200_prev and current_price > sma_10:
+                        signal = {
+                            'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                            'time': now_str,
+                            'type': 'SVXY SMA10→200 Cascade',
+                            'symbol': ticker,
+                            'action': f"BUY 20 shares @ ${current_price:.2f}",
+                            'size': 20,
+                            'entry_price': current_price,
+                            'max_hold': None,
+                            'dte': 0,
+                            'strategy': f'{ticker} Trend Cascade - Strongest',
+                            'thesis': f"SVXY CASCADE (STRONGEST): SMA10 (${sma_10:.2f}) crossed through SMA200 (${sma_200:.2f}). Full trend confirmation. Price ${current_price:.2f}. This is the ultimate confirmation - ADD MAX POSITION.",
+                            'conviction': 9,
+                            'signal_type': 'SVXY SMA10→200 Cascade'
+                        }
+                
+                # SMA 10 crossing SMA 100 - VERY STRONG (8/10) - Large add
+                if not signal and has_sma_10 and has_sma_100 and len(df) >= 100:
+                    sma_10 = sma_values[10]
+                    sma_100 = sma_values[100]
+                    sma_10_prev = df['SMA_10'].iloc[-2] if 'SMA_10' in df.columns else 0
+                    sma_100_prev = df['SMA_100'].iloc[-2] if 'SMA_100' in df.columns else 0
+                    
+                    if sma_10 > sma_100 and sma_10_prev <= sma_100_prev and current_price > sma_10:
+                        signal = {
+                            'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                            'time': now_str,
+                            'type': 'SVXY SMA10→100 Cascade',
+                            'symbol': ticker,
+                            'action': f"BUY 18 shares @ ${current_price:.2f}",
+                            'size': 18,
+                            'entry_price': current_price,
+                            'max_hold': None,
+                            'dte': 0,
+                            'strategy': f'{ticker} Trend Cascade - Very Strong',
+                            'thesis': f"SVXY CASCADE: SMA10 (${sma_10:.2f}) crossed through SMA100 (${sma_100:.2f}). Strong intermediate trend. Price ${current_price:.2f}. Consider ADDING to position.",
+                            'conviction': 8,
+                            'signal_type': 'SVXY SMA10→100 Cascade'
+                        }
+                
+                # SMA 10 crossing SMA 50 - STRONG (8/10) - Add to position
+                if not signal and has_sma_10 and has_sma_50 and len(df) >= 50:
+                    sma_10 = sma_values[10]
+                    sma_50 = sma_values[50]
+                    sma_10_prev = df['SMA_10'].iloc[-2] if 'SMA_10' in df.columns else 0
+                    sma_50_prev = df['SMA_50'].iloc[-2] if 'SMA_50' in df.columns else 0
+                    
+                    if sma_10 > sma_50 and sma_10_prev <= sma_50_prev and current_price > sma_10:
+                        signal = {
+                            'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                            'time': now_str,
+                            'type': 'SVXY SMA10→50 Cascade',
+                            'symbol': ticker,
+                            'action': f"BUY 18 shares @ ${current_price:.2f}",
+                            'size': 18,
+                            'entry_price': current_price,
+                            'max_hold': None,
+                            'dte': 0,
+                            'strategy': f'{ticker} Trend Cascade - Strong',
+                            'thesis': f"SVXY CASCADE: SMA10 (${sma_10:.2f}) crossed through SMA50 (${sma_50:.2f}). Medium-term trend confirmed. Price ${current_price:.2f}. Consider ADDING to existing position.",
+                            'conviction': 8,
+                            'signal_type': 'SVXY SMA10→50 Cascade'
+                        }
+                
+                # SMA 10 crossing SMA 20 - INITIAL ENTRY (7/10) - Start position
+                if not signal and has_sma_10 and has_sma_20 and len(df) >= 20:
+                    sma_10 = sma_values[10]
+                    sma_20 = sma_values[20]
+                    sma_10_prev = df['SMA_10'].iloc[-2] if 'SMA_10' in df.columns else 0
+                    sma_20_prev = df['SMA_20'].iloc[-2] if 'SMA_20' in df.columns else 0
+                    
+                    if sma_10 > sma_20 and sma_10_prev <= sma_20_prev and current_price > sma_10 and volume_ratio > 1.2:
+                        signal = {
+                            'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                            'time': now_str,
+                            'type': 'SVXY SMA10→20 Cascade',
+                            'symbol': ticker,
+                            'action': f"BUY 15 shares @ ${current_price:.2f}",
+                            'size': 15,
+                            'entry_price': current_price,
+                            'max_hold': None,
+                            'dte': 0,
+                            'strategy': f'{ticker} Trend Cascade - Initial',
+                            'thesis': f"SVXY CASCADE (INITIAL): SMA10 (${sma_10:.2f}) crossed SMA20 (${sma_20:.2f}). Early trend signal. Price ${current_price:.2f}, Volume {volume_ratio:.1f}x. INITIAL ENTRY - watch for crosses through SMA50, 100, 200 to ADD.",
+                            'conviction': 7,
+                            'signal_type': 'SVXY SMA10→20 Cascade'
+                        }
+            
             # SMA 10/20 Crossover - 7/10 conviction
             if not signal and 10 in sma_values and 20 in sma_values and len(df) >= 20:
                 sma_10_current = sma_values[10]
@@ -630,7 +736,7 @@ def simulate_exit():
             exit_triggered = True
             exit_reason = f"Stop Loss (-2%)"
         
-        # Exit Rule 2: Trailing Stop after 4% gain
+        # Exit Rule 2: Trailing Stop after 4% gain (1% trailing)
         elif pnl_pct >= 4.0:
             max_pnl_reached = trade.get('max_pnl_reached', pnl_pct)
             if pnl_pct > max_pnl_reached:
@@ -934,7 +1040,7 @@ if selected == "Trading Hub":
             )
     
     with col3:
-        chart_type = st.selectbox("Chart Type", ["Candlestick", "Line"], key="chart_type")
+        chart_type = st.selectbox("Chart Type", ["Line", "Candlestick"], key="chart_type")  # Line is now default
     
     # Technical indicator overlays
     st.caption("Technical Indicators")
@@ -982,6 +1088,10 @@ if selected == "Trading Hub":
                 yf_period, yf_interval = period_map.get(period, ("5d", "15m"))
                 data = t.history(period=yf_period, interval=yf_interval)
         
+        # Remove weekend data (Saturday=5, Sunday=6)
+        if hasattr(data.index, 'dayofweek'):
+            data = data[data.index.dayofweek < 5]
+        
         return data
     
     try:
@@ -1007,7 +1117,18 @@ if selected == "Trading Hub":
             )
             
             # Add price trace
-            if chart_type == "Candlestick":
+            if chart_type == "Line":
+                fig.add_trace(
+                    go.Scatter(
+                        x=chart_data_with_indicators.index,
+                        y=chart_data_with_indicators['Close'],
+                        mode='lines',
+                        name=chart_ticker,
+                        line=dict(color='#FFFFFF', width=2.5)  # White, thicker line for visibility
+                    ),
+                    row=1, col=1
+                )
+            elif chart_type == "Candlestick":
                 fig.add_trace(
                     go.Candlestick(
                         x=chart_data_with_indicators.index,
@@ -1033,8 +1154,14 @@ if selected == "Trading Hub":
                     row=1, col=1
                 )
             
-            # Add SMAs
-            sma_colors = {10: '#ff6b6b', 20: '#4ecdc4', 50: '#45b7d1', 100: '#f7b731', 200: '#5f27cd'}
+            # Add SMAs with COLORBLIND-FRIENDLY colors (high contrast, distinct)
+            sma_colors = {
+                10: '#0000FF',   # Pure Blue (short-term)
+                20: '#FF0000',   # Pure Red (short-medium)
+                50: '#00CC00',   # Bright Green (medium)
+                100: '#FF6600',  # Bright Orange (medium-long)
+                200: '#9900CC'   # Purple (long-term)
+            }
             for sma in show_smas:
                 col_name = f'SMA_{sma}'
                 if col_name in chart_data_with_indicators.columns:
@@ -1338,6 +1465,73 @@ elif selected == "Backtest":
                                 max_gain = 0
                                 continue
                     
+                    # SVXY CASCADE LOGIC: SMA10 crossing through progressively higher SMAs (backtest)
+                    if ticker == "SVXY" and not in_position:
+                        # SMA 10 crossing SMA 200 - STRONGEST (9/10)
+                        if ('SMA_10' in hist.columns and 'SMA_200' in hist.columns and
+                            len(hist) >= 200 and i > 0):
+                            if (hist['SMA_10'].iloc[i] > hist['SMA_200'].iloc[i] and
+                                hist['SMA_10'].iloc[i-1] <= hist['SMA_200'].iloc[i-1] and
+                                current_price > hist['SMA_10'].iloc[i]):
+                                in_position = True
+                                entry_price = current_price
+                                entry_time = current_time
+                                conviction = 9
+                                shares = 20
+                                signal_type = "SVXY SMA10→200 Cascade"
+                                entry_reason = f"SVXY CASCADE (STRONGEST): SMA10 (${hist['SMA_10'].iloc[i]:.2f}) crossed through SMA200 (${hist['SMA_200'].iloc[i]:.2f}). Ultimate confirmation."
+                                max_gain = 0
+                                continue
+                        
+                        # SMA 10 crossing SMA 100 - VERY STRONG (8/10)
+                        if ('SMA_10' in hist.columns and 'SMA_100' in hist.columns and
+                            len(hist) >= 100 and i > 0):
+                            if (hist['SMA_10'].iloc[i] > hist['SMA_100'].iloc[i] and
+                                hist['SMA_10'].iloc[i-1] <= hist['SMA_100'].iloc[i-1] and
+                                current_price > hist['SMA_10'].iloc[i]):
+                                in_position = True
+                                entry_price = current_price
+                                entry_time = current_time
+                                conviction = 8
+                                shares = 18
+                                signal_type = "SVXY SMA10→100 Cascade"
+                                entry_reason = f"SVXY CASCADE: SMA10 (${hist['SMA_10'].iloc[i]:.2f}) crossed through SMA100 (${hist['SMA_100'].iloc[i]:.2f}). Strong intermediate trend. ADD to position."
+                                max_gain = 0
+                                continue
+                        
+                        # SMA 10 crossing SMA 50 - STRONG (8/10)
+                        if ('SMA_10' in hist.columns and 'SMA_50' in hist.columns and
+                            len(hist) >= 50 and i > 0):
+                            if (hist['SMA_10'].iloc[i] > hist['SMA_50'].iloc[i] and
+                                hist['SMA_10'].iloc[i-1] <= hist['SMA_50'].iloc[i-1] and
+                                current_price > hist['SMA_10'].iloc[i]):
+                                in_position = True
+                                entry_price = current_price
+                                entry_time = current_time
+                                conviction = 8
+                                shares = 18
+                                signal_type = "SVXY SMA10→50 Cascade"
+                                entry_reason = f"SVXY CASCADE: SMA10 (${hist['SMA_10'].iloc[i]:.2f}) crossed through SMA50 (${hist['SMA_50'].iloc[i]:.2f}). Medium-term confirmed. ADD to position."
+                                max_gain = 0
+                                continue
+                        
+                        # SMA 10 crossing SMA 20 - INITIAL (7/10)
+                        if ('SMA_10' in hist.columns and 'SMA_20' in hist.columns and
+                            'Volume_Ratio' in hist.columns and len(hist) >= 20 and i > 0):
+                            if (hist['SMA_10'].iloc[i] > hist['SMA_20'].iloc[i] and
+                                hist['SMA_10'].iloc[i-1] <= hist['SMA_20'].iloc[i-1] and
+                                current_price > hist['SMA_10'].iloc[i] and
+                                hist['Volume_Ratio'].iloc[i] > 1.2):
+                                in_position = True
+                                entry_price = current_price
+                                entry_time = current_time
+                                conviction = 7
+                                shares = 15
+                                signal_type = "SVXY SMA10→20 Cascade"
+                                entry_reason = f"SVXY CASCADE (INITIAL): SMA10 (${hist['SMA_10'].iloc[i]:.2f}) crossed SMA20 (${hist['SMA_20'].iloc[i]:.2f}). INITIAL ENTRY - watch for more crosses to ADD."
+                                max_gain = 0
+                                continue
+                    
                     # Golden Cross - 9/10 conviction
                     if ('SMA_50' in hist.columns and 'SMA_200' in hist.columns and 
                         len(hist) >= 200):
@@ -1477,8 +1671,8 @@ elif selected == "Backtest":
                         exit_triggered = True
                         exit_reason = "Stop Loss (-2%)"
                     
-                    # Trailing Stop after 4% gain
-                    elif max_gain >= 4.0 and (max_gain - gain_pct) >= 2.0:
+                    # Trailing Stop after 4% gain (1% trailing)
+                    elif max_gain >= 4.0 and (max_gain - gain_pct) >= 1.0:
                         exit_triggered = True
                         exit_reason = f"Trailing Stop (from +{max_gain:.1f}%)"
                     
