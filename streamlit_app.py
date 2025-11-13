@@ -1027,7 +1027,7 @@ if selected == "Trading Hub":
         time_period = st.selectbox(
             "Time Period",
             ["1D", "5D", "1M", "MTD", "QTD", "YTD", "1Y", "3Y", "5Y", "10Y", "MAX", "Custom"],
-            index=1,
+            index=5,  # YTD is now default (index 5)
             key="chart_period"
         )
     
@@ -1046,7 +1046,7 @@ if selected == "Trading Hub":
     st.caption("Technical Indicators")
     col1, col2, col3 = st.columns(3)
     with col1:
-        show_smas = st.multiselect("SMAs", [10, 20, 50, 100, 200], default=[20, 50], key="sma_select")
+        show_smas = st.multiselect("SMAs", [10, 20, 50, 100, 200], default=[], key="sma_select")  # No default SMAs
     with col2:
         show_bb = st.checkbox("Bollinger Bands", key="bb_select")
     with col3:
@@ -1124,7 +1124,8 @@ if selected == "Trading Hub":
                         y=chart_data_with_indicators['Close'],
                         mode='lines',
                         name=chart_ticker,
-                        line=dict(color='#FFFFFF', width=2.5)  # White, thicker line for visibility
+                        line=dict(color='#00FFFF', width=3),  # Bright Cyan, thicker for visibility
+                        showlegend=True
                     ),
                     row=1, col=1
                 )
@@ -1362,25 +1363,47 @@ elif selected == "Options Chain":
                     df['Distance'] = ((df['strike'] - current_price) / current_price * 100).round(2)
                     df['POP'] = (df['impliedVolatility'] * 100).round(0)
                     
+                    # Sort by strike
+                    df = df.sort_values(['expiration', 'strike'])
+                    
+                    # Smart filtering: Show ATM/ITM and nearby OTM (±10% range)
+                    st.subheader("Smart Filter Options")
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        show_all_options = st.checkbox("Show All Options (unfiltered)", value=False, key="show_all_opts")
+                    with col2:
+                        st.write("")
+                    
+                    if not show_all_options:
+                        # Calculate 10% range
+                        lower_bound = current_price * 0.90  # 10% below
+                        upper_bound = current_price * 1.10  # 10% above
+                        
+                        # Filter to ±10% range
+                        df_filtered = df[(df['strike'] >= lower_bound) & (df['strike'] <= upper_bound)].copy()
+                        
+                        st.caption(f"Showing strikes within ±10% of current price (${current_price:.2f}): ${lower_bound:.2f} to ${upper_bound:.2f}")
+                        st.caption(f"Displaying {len(df_filtered)} of {len(df)} total options. Check 'Show All Options' to see entire chain.")
+                        
+                        display_df = df_filtered
+                    else:
+                        st.caption(f"Showing all {len(df)} options contracts")
+                        display_df = df
+                    
                     # Define columns to display (only those that exist)
                     display_cols = ['symbol', 'type', 'strike', 'expiration', 'dte', 'lastPrice', 'bid', 'ask', 'mid', 
                                    'volume', 'openInterest', 'impliedVolatility', 'delta', 'gamma', 
                                    'theta', 'vega', 'Distance', 'POP']
                     
                     # Filter to only existing columns
-                    available_cols = [col for col in display_cols if col in df.columns]
-                    
-                    # Sort by strike
-                    df = df.sort_values(['expiration', 'strike'])
+                    available_cols = [col for col in display_cols if col in display_df.columns]
                     
                     # Display
                     st.dataframe(
-                        df[available_cols],
+                        display_df[available_cols],
                         use_container_width=True,
                         height=500
                     )
-                    
-                    st.caption(f"Showing {len(df)} options contracts")
                 else:
                     st.info("No options data available for selected criteria.")
         else:
