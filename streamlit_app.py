@@ -25,9 +25,9 @@ from macro_analysis_CORRECTED import (
     calculate_position_size
 )
 
-st.set_page_config(page_title="SPY Pro v2.36", layout="wide")
-st.title("SPY Pro v2.36 - Signal Generation Fixed")
-st.caption("Active Signals! | Vol Spike Trading | -5% Max Loss | +10% Min Target")
+st.set_page_config(page_title="SPY Pro v2.37-DEBUG", layout="wide")
+st.title("SPY Pro v2.37 - DEBUG MODE")
+st.caption("🔍 Signal Generation Diagnostics | Force Generate | Market Hours Display")
 
 # Persistent Storage Paths
 DATA_DIR = Path("trading_data")
@@ -1041,13 +1041,76 @@ if selected == "Trading Hub":
     
     st.divider()
     
+    # V2.37: DEBUG - Show market status and signal generation info
+    st.info(f"""
+    **Market Status:** {'🟢 OPEN' if is_market_open() else '🔴 CLOSED'}  
+    **Current Time (ET):** {datetime.now(ZoneInfo("US/Eastern")).strftime('%I:%M:%S %p')}  
+    **Signal Queue:** {len(st.session_state.signal_queue)} signals  
+    **Signal Generation:** {'✅ Active' if is_market_open() else '❌ Disabled (market closed)'}
+    """)
+    
+    # Manual signal generation button (for testing)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("🔄 Force Generate Signals", use_container_width=True):
+            generate_signal()
+            st.rerun()
+    with col2:
+        if st.button("🗑️ Clear All Signals", use_container_width=True):
+            st.session_state.signal_queue = []
+            save_json(SIGNAL_QUEUE_FILE, [])
+            st.rerun()
+    with col3:
+        if st.button("🧪 Test Signal (Bypass Market Hours)", use_container_width=True):
+            # Force generate a test signal regardless of market hours
+            test_signal = {
+                'id': f"TEST-{datetime.now().strftime('%H%M%S')}",
+                'time': datetime.now(ZoneInfo("US/Eastern")).strftime("%m/%d %H:%M"),
+                'type': 'TEST SIGNAL',
+                'symbol': 'SPY',
+                'action': 'BUY 10 shares @ TEST',
+                'size': 10,
+                'entry_price': 0,
+                'max_hold': None,
+                'dte': 0,
+                'strategy': 'Test Signal - Market Hours Bypass',
+                'thesis': 'This is a test signal to verify signal display is working. Market hours check bypassed.',
+                'conviction': 5,
+                'signal_type': 'Test'
+            }
+            st.session_state.signal_queue.append(test_signal)
+            save_json(SIGNAL_QUEUE_FILE, st.session_state.signal_queue)
+            st.success("Test signal added!")
+            st.rerun()
+    
+    st.divider()
+    
     # Auto-generate signals
     if is_market_open():
         generate_signal()
         simulate_exit()
+    else:
+        st.warning("⏰ Market is currently closed. Signal generation is paused. Use 'Force Generate Signals' button to test during closed hours.")
     
     # Display Signals
     st.subheader(f"Trading Signals ({len(st.session_state.signal_queue)} Active)")
+    
+    if len(st.session_state.signal_queue) == 0:
+        st.info("""
+        **No signals currently active.**
+        
+        Signals will appear when:
+        1. ✅ Market is open (9:30 AM - 4:00 PM ET, Mon-Fri)
+        2. ✅ Valid technical setup detected (SMA cross, volume spike, etc.)
+        3. ✅ Passes conviction threshold (currently: {})
+        4. ✅ Passes macro filter (if enabled)
+        
+        **Try these:**
+        - Click "🔄 Force Generate Signals" button above
+        - Lower "Min Conviction" in sidebar (try 3-4)
+        - Turn OFF "Macro Signal Filter" temporarily
+        - Use "🧪 Test Signal" to verify display works
+        """.format(MIN_CONVICTION))
     
     for sig in st.session_state.signal_queue:
         st.markdown(f"""
