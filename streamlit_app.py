@@ -12,13 +12,15 @@ import json
 from pathlib import Path
 from plotly.subplots import make_subplots
 
-# V2.36 Enhancement: Corrected stop loss logic and target returns
+# V2.35 Enhancement: Macro Analysis and Dynamic Risk Management
 
-from macro_analysis_v2_36 import (
+# V2 - CORRECTED: Proper trailing stop logic and new exit rules
+
+from macro_analysis_v2 import (
 MacroAnalyzer,
 calculate_dynamic_stop_loss,
 calculate_trailing_stop,
-should_exit_for_target,
+check_exit_conditions,
 detect_drawdown_regime,
 calculate_recovery_speed,
 adjust_signal_for_macro,
@@ -26,9 +28,9 @@ should_take_signal,
 calculate_position_size
 )
 
-st.set_page_config(page_title=“SPY Pro v2.36”, layout=“wide”)
-st.title(“SPY Pro v2.36 - Corrected Stop Logic”)
-st.caption(“Let Winners Run | -5% Max Loss | +10% Min Target | Macro-Aware Trading”)
+st.set_page_config(page_title=“SPY Pro v2.35-V2”, layout=“wide”)
+st.title(“SPY Pro v2.35-V2 - Corrected Exit Logic”)
+st.caption(“Let Winners Run! | -5% Max Loss | +10% Min Target | Wider Trailing Stops”)
 
 # Persistent Storage Paths
 
@@ -150,14 +152,19 @@ try:
 except:
     st.caption("Regime: Loading...")
 
-# V2.36: Feature Toggles
+# V2.35: Feature Toggles
 st.divider()
-st.subheader("v2.36 Features")
+st.subheader("v2.35-V2 Features")
+st.caption("**V2 Changes:**")
+st.caption("• Max Loss: -5% (not -2%)")
+st.caption("• Min Target: +10% before exit")
+st.caption("• Wider trailing stops (let winners run)")
+st.caption("• Trail: 2.5% @ +10%, 5% @ +20%, 7.5% @ +30%")
+
 ENABLE_MACRO_FILTER = st.toggle("Macro Signal Filter", value=True)
 MIN_CONVICTION = st.slider("Min Conviction", 1, 10, 6)
 USE_DYNAMIC_STOPS = st.toggle("Dynamic Stop Loss", value=True)
 DISABLE_MEAN_REVERSION = st.toggle("Disable Mean Reversion", value=True)
-st.caption("v2.36: -5% max loss, +10% min target, wider trailing stops")
 ```
 
 # Market Hours
@@ -1881,33 +1888,29 @@ def run_enhanced_backtest(ticker):
                 exit_triggered = False
                 exit_reason = ""
                 
-                # V2.36: Target return and corrected stop loss logic
+                # V2.35-V2: NEW EXIT RULES - Corrected Logic
                 if USE_DYNAMIC_STOPS:
-                    # Use the new v2.36 exit logic
-                    exit_decision = should_exit_for_target(gain_pct, max_gain)
-                    
-                    if exit_decision['should_exit']:
-                        exit_triggered = True
-                        exit_reason = exit_decision['reason']
+                    # Use new comprehensive exit logic
+                    exit_triggered, exit_reason = check_exit_conditions(
+                        gain_pct, max_gain, conviction, days_held
+                    )
                 else:
-                    # Original fixed stop and trailing
-                    if gain_pct <= -5.0:
+                    # Original fixed stop logic (for comparison)
+                    if gain_pct <= -2.0:
                         exit_triggered = True
-                        exit_reason = "Stop Loss (-5%)"
-                    elif max_gain >= 10.0:
-                        # Old style trailing after 10%
-                        trailing_info = calculate_trailing_stop(gain_pct, max_gain)
-                        if trailing_info['should_exit']:
-                            exit_triggered = True
-                            exit_reason = f"Trailing Stop (from +{max_gain:.1f}%)"
+                        exit_reason = "Stop Loss (-2%)"
+                    elif max_gain >= 4.0 and (max_gain - gain_pct) >= 1.0:
+                        exit_triggered = True
+                        exit_reason = f"Trailing Stop (from +{max_gain:.1f}%)"
                 
-                # Keep momentum reversal as additional exit (but only if already profitable)
-                if not exit_triggered and gain_pct > 10.0:
+                # Keep momentum reversal as backup exit (only if dynamic stops not triggered)
+                if not exit_triggered:
                     if ('Volume_Ratio' in hist.columns and 
                         hist['Volume_Ratio'].iloc[i] > 2.5 and
-                        hist['Close'].pct_change().iloc[i] < -0.01):
+                        hist['Close'].pct_change().iloc[i] < -0.01 and
+                        gain_pct > 1.0):
                         exit_triggered = True
-                        exit_reason = "Momentum Reversal (after +10%)"
+                        exit_reason = "Momentum Reversal"
                 
                 if exit_triggered:
                     exit_price = current_price
@@ -2148,7 +2151,7 @@ else:  # Portfolio Mode
             st.info("No trades generated across any tickers in backtest period.")
 ```
 
-# V2.36: Macro Dashboard Page
+# V2.35: Macro Dashboard Page
 
 elif selected == “Macro Dashboard”:
 st.header(“📊 Macro Economic Indicators”)
