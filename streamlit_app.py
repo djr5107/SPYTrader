@@ -1794,20 +1794,15 @@ elif selected == "Backtest":
 trades_df, summary = run_enhanced_backtest(backtest_ticker)
 
 # === DISPLAY RESULTS USING OUR FUNCTION ===
-if not trades_df.empty:
-            display_backtest_results(final_df, final_summary)
-    else:
-            st.warning("No trades generated across all tickers.")
-    
-    else:  # Portfolio Mode
-        with st.spinner(f"Running portfolio backtest across {len(tickers_to_test)} tickers..."):
-            all_trades = []
-            
-            for ticker in tickers_to_test:
-                trades_df, error = run_enhanced_backtest(ticker)
-                if not error and not trades_df.empty:
-                    trades_df['Ticker'] = ticker
-                    all_trades.append(trades_df)
+if all_trades:
+            final_df = pd.concat(all_trades, ignore_index=True)
+            final_summary = f"Portfolio Backtest Complete: {len(final_df)} total trades across {len(tickers_to_test)} tickers"
+            if not final_df.empty:
+                display_backtest_results(final_df, final_summary)
+            else:
+                st.warning("No trades generated across all tickers.")
+        else:
+            st.warning("No data or trades generated.")
             
             if all_trades:
                 portfolio_df = pd.concat(all_trades, ignore_index=True)
