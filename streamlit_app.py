@@ -28,9 +28,9 @@ should_take_signal,
 calculate_position_size
 )
 
-st.set_page_config(page_title=“SPY Pro v2.35-V2”, layout=“wide”)
-st.title(“SPY Pro v2.35-V2 - Corrected Exit Logic”)
-st.caption(“Let Winners Run! | -5% Max Loss | +10% Min Target | Wider Trailing Stops”)
+st.set_page_config(page_title="SPY Pro v2.35", layout="wide")
+st.title("SPY Pro v2.35 - Macro-Aware Trading")
+st.caption("Multi-Ticker | Dynamic Stops | Macro Integration | Enhanced Technicals | Volume Analysis")
 
 # Persistent Storage Paths
 
