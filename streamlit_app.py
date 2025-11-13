@@ -1801,8 +1801,7 @@ if all_trades:
                 display_backtest_results(final_df, final_summary)
             else:
                 st.warning("No trades generated across all tickers.")
-        else:
-            st.warning("No data or trades generated.")
+
             
             if all_trades:
                 portfolio_df = pd.concat(all_trades, ignore_index=True)
