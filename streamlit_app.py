@@ -36,7 +36,7 @@ st.caption("Multi-Ticker | Dynamic Stops | Macro Integration | Enhanced Technica
 
 DATA_DIR = Path("trading_data")
 DATA_DIR.mkdir(exist_ok=True)
-TRADE_LOG_FILE = DATA_DIR / “trade_log.json”
+TRADE_LOG_FILE = DATA_DIR / "trade_log.json"
 ACTIVE_TRADES_FILE = DATA_DIR / “active_trades.json”
 SIGNAL_QUEUE_FILE = DATA_DIR / “signal_queue.json”
 PERFORMANCE_FILE = DATA_DIR / “performance_metrics.json”
