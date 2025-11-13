@@ -716,6 +716,8 @@ elif selected == "Backtest":
             signal_type = ""
             security = ""
             order_type = ""
+            conviction = 0
+            shares = 10
             
             for i in range(50, len(hist)):
                 current_time = hist.index[i]
@@ -731,7 +733,7 @@ elif selected == "Backtest":
                 if not in_position:
                     # Look for entry signals - IMPROVED BASED ON BACKTEST PERFORMANCE
                     
-                    # Signal 1: Volume Breakout - TIGHTENED (was losing money)
+                    # Signal 1: Volume Breakout - CONVICTION: 7/10
                     # Only take when VERY strong volume AND confirming price action
                     if (hist['volume_ratio'].iloc[i] > 2.2 and  # Increased from 1.4 to 2.2
                         hist['price_change'].iloc[i] > 0.003 and  # Must have 0.3%+ move
@@ -740,26 +742,30 @@ elif selected == "Backtest":
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
+                        conviction = 7
+                        shares = 15
                         entry_reason = f"Strong volume breakout ({hist['volume_ratio'].iloc[i]:.1f}x avg) with solid price momentum +{hist['price_change'].iloc[i]*100:.1f}% above SMA20 (${hist['SMA_20'].iloc[i]:.2f})"
                         signal_type = "Volume Breakout"
                         security = "SPY"
                         order_type = "BUY"
                         continue
                     
-                    # Signal 2: Golden Cross - HIGH CONVICTION (historically strong)
+                    # Signal 2: Golden Cross - CONVICTION: 9/10 (Historically very strong)
                     if (hist['SMA_20'].iloc[i] > hist['SMA_50'].iloc[i] and 
                         hist['SMA_20'].iloc[i-1] <= hist['SMA_50'].iloc[i-1] and
                         current_volume > hist['volume_ma'].iloc[i] * 0.9):  # Slight volume confirmation
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
+                        conviction = 9
+                        shares = 20
                         entry_reason = f"Golden Cross: SMA20 (${hist['SMA_20'].iloc[i]:.2f}) crossed above SMA50 (${hist['SMA_50'].iloc[i]:.2f}) - strong trend signal"
                         signal_type = "Golden Cross"
                         security = "SPY"
                         order_type = "BUY"
                         continue
                     
-                    # Signal 3: SMA Breakout - STRENGTHENED (good historical performance)
+                    # Signal 3: SMA Breakout - CONVICTION: 8/10 (Good in uptrends)
                     if (current_price > hist['SMA_20'].iloc[i] * 1.003 and  # Back to 0.3% above
                         hist['Close'].iloc[i-1] <= hist['SMA_20'].iloc[i-1] * 1.002 and  # Clear break
                         hist['volume_ratio'].iloc[i] > 1.2 and  # Volume confirmation
@@ -767,13 +773,15 @@ elif selected == "Backtest":
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
+                        conviction = 8
+                        shares = 18
                         entry_reason = f"SMA20 breakout: Price at ${current_price:.2f} broke above SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with volume ({hist['volume_ratio'].iloc[i]:.1f}x) in confirmed uptrend"
                         signal_type = "SMA Breakout"
                         security = "SPY"
                         order_type = "BUY"
                         continue
                     
-                    # Signal 4: Oversold Bounce - MODERATE (works in right conditions)
+                    # Signal 4: Oversold Bounce - CONVICTION: 6/10 (Moderate, timing dependent)
                     recent_low = hist['Close'].iloc[i-10:i].min()
                     recent_high = hist['Close'].iloc[i-10:i].max()
                     price_range = recent_high - recent_low
@@ -785,13 +793,15 @@ elif selected == "Backtest":
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
+                        conviction = 6
+                        shares = 12
                         entry_reason = f"Oversold bounce: Price bounced from recent low (${recent_low:.2f}) with strong volume ({hist['volume_ratio'].iloc[i]:.1f}x) in uptrend"
                         signal_type = "Reversal Long"
                         security = "SPY"
                         order_type = "BUY"
                         continue
                     
-                    # Signal 5: Bearish Breakdown for SHORT - TIGHTENED
+                    # Signal 5: Bearish Breakdown for SHORT - CONVICTION: 7/10
                     if (current_price < hist['SMA_20'].iloc[i] * 0.997 and
                         hist['Close'].iloc[i-1] >= hist['SMA_20'].iloc[i-1] and
                         hist['volume_ratio'].iloc[i] > 1.5 and  # Strong volume
@@ -800,6 +810,8 @@ elif selected == "Backtest":
                         in_position = True
                         entry_price = current_price
                         entry_time = current_time
+                        conviction = 7
+                        shares = 15
                         entry_reason = f"Bearish breakdown: Price broke below SMA20 (${hist['SMA_20'].iloc[i]:.2f}) with volume ({hist['volume_ratio'].iloc[i]:.1f}x) in confirmed downtrend"
                         signal_type = "Bearish Breakdown"
                         security = "SPY"
@@ -826,55 +838,42 @@ elif selected == "Backtest":
                     exit_triggered = False
                     exit_reason = ""
                     
-                    # Exit 1: REMOVED PROFIT CAP - Let winners run to 10%+!
-                    # Only exit on stop loss, time limit, or trailing stop
-                    
-                    # Exit 2: Stop loss hit (3% for higher conviction)
-                    if pnl_pct <= -0.03:  # 3% stop loss - allows for volatility
+                    # Exit 1: Stop loss hit (-3%)
+                    if pnl_pct <= -0.03:  # 3% stop loss
                         exit_triggered = True
                         exit_reason = f"Stop loss triggered ({pnl_pct*100:.2f}%) - cut losses at 3%"
                     
-                    # Exit 3: Extended time limit (10 days for daily, 50 hours for intraday)
-                    elif time_in_trade >= 3900:  # ~10 trading days for daily, ~65 hours for intraday
-                        exit_triggered = True
-                        if pnl_pct > 0:
-                            exit_reason = f"Maximum hold time reached ({time_in_trade/390:.1f} trading days) - exit with {pnl_pct*100:.2f}% profit" if data_interval == "daily" else f"Maximum hold time reached ({time_in_trade:.0f} min) - exit with {pnl_pct*100:.2f}% profit"
-                        else:
-                            exit_reason = f"Maximum hold time reached ({time_in_trade/390:.1f} trading days) - exit position" if data_interval == "daily" else f"Maximum hold time reached ({time_in_trade:.0f} min) - exit position"
-                    
-                    # Exit 4: Trailing stop - protect profits once up 4%
+                    # Exit 2: Trailing stop - protect profits once up 4%
                     elif pnl_pct >= 0.04:  # Once up 4%, use trailing stop
                         # Check if price pulled back 2% from recent high
                         recent_high = hist['Close'].iloc[max(0, i-10):i].max()
                         if current_price < recent_high * 0.98:  # 2% pullback
                             exit_triggered = True
-                            exit_reason = f"Trailing stop triggered - locking in {pnl_pct*100:.2f}% profit after pullback from recent high ${recent_high:.2f}"
+                            exit_reason = f"Trailing stop triggered - locking in {pnl_pct*100:.2f}% profit after pullback from ${recent_high:.2f}"
                     
-                    # Exit 5: Strong momentum reversal with volume (only if losing)
+                    # Exit 3: Strong momentum reversal with very high volume
                     elif (pnl_pct < -0.01 and 
                           hist['volume_ratio'].iloc[i] > 2.0 and
                           hist['price_change'].iloc[i] < -0.008):
                         exit_triggered = True
-                        exit_reason = f"Strong bearish momentum reversal with very high volume - exit to prevent larger loss (currently {pnl_pct*100:.2f}%)"
+                        exit_reason = f"Strong bearish reversal with very high volume ({hist['volume_ratio'].iloc[i]:.1f}x) - exit to prevent larger loss"
                     
-                    # Exit 6: Major SMA support/resistance break (only if losing significantly)
+                    # Exit 4: Major SMA support/resistance break (only if losing significantly)
                     elif order_type == "BUY" and current_price < hist['SMA_20'].iloc[i] * 0.985 and pnl_pct < -0.015:
                         exit_triggered = True
-                        exit_reason = f"Price broke significantly below SMA20 support (${hist['SMA_20'].iloc[i]:.2f}) - exit long position"
+                        exit_reason = f"Price broke significantly below SMA20 support (${hist['SMA_20'].iloc[i]:.2f}) - exit long"
                     elif order_type == "SELL SHORT" and current_price > hist['SMA_20'].iloc[i] * 1.015 and pnl_pct < -0.015:
                         exit_triggered = True
-                        exit_reason = f"Price broke significantly above SMA20 resistance (${hist['SMA_20'].iloc[i]:.2f}) - cover short position"
+                        exit_reason = f"Price broke significantly above SMA20 resistance (${hist['SMA_20'].iloc[i]:.2f}) - cover short"
                     
                     if exit_triggered:
-                        # Calculate P&L for 10 shares
-                        shares = 10
-                        
                         completed_trades.append({
                             'Entry Date': entry_time.strftime('%m/%d/%Y'),
                             'Entry Time': entry_time.strftime('%I:%M %p') if data_interval != "daily" else "Market Open",
                             'Security': security,
                             'Entry Order': order_type,
                             'Signal Type': signal_type,
+                            'Conviction': conviction,
                             'Entry Price': f"${entry_price:.2f}",
                             'Entry Reason': entry_reason,
                             'Exit Date': current_time.strftime('%m/%d/%Y'),
@@ -981,7 +980,7 @@ elif selected == "Backtest":
         # Analysis insights
         st.subheader("📊 Backtest Insights")
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             st.markdown("**Signal Type Performance**")
@@ -990,6 +989,16 @@ elif selected == "Backtest":
             st.dataframe(signal_perf, use_container_width=True)
         
         with col2:
+            st.markdown("**Conviction Score Analysis**")
+            if 'Conviction' in backtest_df.columns:
+                conviction_perf = backtest_df.groupby('Conviction')['P&L Numeric'].agg(['count', 'sum', 'mean']).round(2)
+                conviction_perf.columns = ['Trades', 'Total P&L', 'Avg P&L']
+                conviction_perf.index.name = 'Score'
+                st.dataframe(conviction_perf, use_container_width=True)
+            else:
+                st.write("No conviction data")
+        
+        with col3:
             st.markdown("**Exit Reason Analysis**")
             # Extract primary exit reason (first part before parenthesis)
             backtest_df['Exit Type'] = backtest_df['Exit Reason'].str.split('(').str[0].str.strip()
