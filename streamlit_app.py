@@ -1796,7 +1796,7 @@ trades_df, summary = run_enhanced_backtest(backtest_ticker)
 # === DISPLAY RESULTS USING OUR FUNCTION ===
 if not trades_df.empty:
             display_backtest_results(final_df, final_summary)
-        else:
+    else:
             st.warning("No trades generated across all tickers.")
     
     else:  # Portfolio Mode
