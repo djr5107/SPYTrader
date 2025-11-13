@@ -1416,8 +1416,20 @@ elif selected == "Backtest":
     st.header("Backtest: Enhanced Multi-Signal Strategy")
     st.caption("Real historical data with conviction-based position sizing and no max hold time")
     
-    # Add ticker selection for backtest
-    backtest_ticker = st.selectbox("Select Ticker for Backtest", TICKERS, key="backtest_ticker")
+    # Add backtest mode selection
+    col1, col2 = st.columns(2)
+    with col1:
+        backtest_mode = st.radio("Backtest Mode", ["Single Ticker", "Portfolio (All Tickers)"], horizontal=True)
+    with col2:
+        st.write("")  # Spacer
+    
+    # Add ticker selection for single ticker backtest
+    if backtest_mode == "Single Ticker":
+        backtest_ticker = st.selectbox("Select Ticker for Backtest", TICKERS, key="backtest_ticker")
+        tickers_to_test = [backtest_ticker]
+    else:
+        tickers_to_test = TICKERS
+        st.info(f"Running portfolio backtest across all {len(TICKERS)} tickers: {', '.join(TICKERS)}")
     
     @st.cache_data(ttl=3600)
     def run_enhanced_backtest(ticker):
@@ -1425,8 +1437,8 @@ elif selected == "Backtest":
         try:
             t = yf.Ticker(ticker)
             
-            # Get historical data
-            hist = t.history(period="1y", interval="1d")
+            # Get 2 years of historical data for better coverage
+            hist = t.history(period="2y", interval="1d")
             
             if hist.empty or len(hist) < 200:
                 return pd.DataFrame(), f"Insufficient data for {ticker}"
@@ -1764,61 +1776,246 @@ elif selected == "Backtest":
         except Exception as e:
             return pd.DataFrame(), f"Error: {str(e)}"
     
-    with st.spinner(f"Running backtest for {backtest_ticker}..."):
-        trades_df, error = run_enhanced_backtest(backtest_ticker)
-        
-        if error:
-            st.error(error)
-        elif not trades_df.empty:
-            st.success(f"Backtest Complete: {len(trades_df)} trades")
+    # Run backtest for selected ticker(s)
+    if backtest_mode == "Single Ticker":
+        with st.spinner(f"Running backtest for {backtest_ticker}..."):
+            trades_df, error = run_enhanced_backtest(backtest_ticker)
             
-            # Overall metrics
-            total_pnl = trades_df['P&L'].sum()
-            wins = len(trades_df[trades_df['P&L'] > 0])
-            losses = len(trades_df[trades_df['P&L'] <= 0])
-            win_rate = (wins / len(trades_df) * 100) if len(trades_df) > 0 else 0
-            avg_win = trades_df[trades_df['P&L'] > 0]['P&L'].mean() if wins > 0 else 0
-            avg_loss = trades_df[trades_df['P&L'] <= 0]['P&L'].mean() if losses > 0 else 0
+            if error:
+                st.error(error)
+            elif not trades_df.empty:
+                # Add ticker column
+                trades_df['Ticker'] = backtest_ticker
+                
+                st.success(f"Backtest Complete: {len(trades_df)} trades")
+                
+                # Display single ticker results
+                display_backtest_results(trades_df, backtest_ticker)
+            else:
+                st.info("No trades generated in backtest period.")
+    
+    else:  # Portfolio Mode
+        with st.spinner(f"Running portfolio backtest across {len(tickers_to_test)} tickers..."):
+            all_trades = []
             
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Total P&L", f"${total_pnl:,.0f}")
-            col2.metric("Trades", len(trades_df))
-            col3.metric("Win Rate", f"{win_rate:.1f}%")
-            col4.metric("Avg Win", f"${avg_win:.0f}")
-            col5.metric("Avg Loss", f"${avg_loss:.0f}")
+            for ticker in tickers_to_test:
+                trades_df, error = run_enhanced_backtest(ticker)
+                if not error and not trades_df.empty:
+                    trades_df['Ticker'] = ticker
+                    all_trades.append(trades_df)
             
-            # Conviction Analysis
-            st.subheader("Conviction Score Analysis")
-            conviction_stats = trades_df.groupby('Conviction').agg({
-                'P&L': ['count', 'sum', 'mean'],
-                'P&L %': 'mean',
-                'Days Held': 'mean'
-            }).round(2)
-            conviction_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %', 'Avg Days Held']
-            st.dataframe(conviction_stats, use_container_width=True)
-            
-            # Signal Type Analysis
-            st.subheader("Signal Type Performance")
-            signal_stats = trades_df.groupby('Signal Type').agg({
-                'P&L': ['count', 'sum', 'mean'],
-                'P&L %': 'mean'
-            }).round(2)
-            signal_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %']
-            st.dataframe(signal_stats, use_container_width=True)
-            
-            # Trade Log
-            st.subheader("Trade Log")
-            st.dataframe(trades_df, use_container_width=True, height=400)
-            
-            # Download
-            st.download_button(
-                "Download Backtest Results",
-                trades_df.to_csv(index=False),
-                f"{backtest_ticker}_backtest_results.csv",
-                "text/csv"
-            )
-        else:
-            st.info("No trades generated in backtest period.")
+            if all_trades:
+                portfolio_df = pd.concat(all_trades, ignore_index=True)
+                portfolio_df['Entry Date'] = pd.to_datetime(portfolio_df['Entry Date'])
+                portfolio_df['Exit Date'] = pd.to_datetime(portfolio_df['Exit Date'])
+                portfolio_df = portfolio_df.sort_values('Entry Date')
+                
+                st.success(f"Portfolio Backtest Complete: {len(portfolio_df)} trades across {len(all_trades)} tickers")
+                
+                # PORTFOLIO ANALYSIS
+                st.header("📊 Portfolio Performance")
+                
+                # Overall metrics
+                total_pnl = portfolio_df['P&L'].sum()
+                wins = len(portfolio_df[portfolio_df['P&L'] > 0])
+                losses = len(portfolio_df[portfolio_df['P&L'] <= 0])
+                win_rate = (wins / len(portfolio_df) * 100) if len(portfolio_df) > 0 else 0
+                avg_win = portfolio_df[portfolio_df['P&L'] > 0]['P&L'].mean() if wins > 0 else 0
+                avg_loss = portfolio_df[portfolio_df['P&L'] <= 0]['P&L'].mean() if losses > 0 else 0
+                
+                # Calculate capital at risk
+                portfolio_df['Capital_At_Risk'] = portfolio_df['Entry Price'] * portfolio_df['Shares']
+                max_capital_at_risk = portfolio_df['Capital_At_Risk'].max()
+                avg_capital_at_risk = portfolio_df['Capital_At_Risk'].mean()
+                
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                col1.metric("Total P&L", f"${total_pnl:,.0f}")
+                col2.metric("Return on $25K", f"{(total_pnl/25000)*100:.1f}%")
+                col3.metric("Total Trades", len(portfolio_df))
+                col4.metric("Win Rate", f"{win_rate:.1f}%")
+                col5.metric("Avg Win", f"${avg_win:.0f}")
+                col6.metric("Avg Loss", f"${avg_loss:.0f}")
+                
+                st.divider()
+                
+                # BANKROLL TRACKING
+                st.subheader("💰 Bankroll Evolution ($25,000 Starting Capital)")
+                
+                # Calculate running bankroll
+                starting_capital = 25000
+                portfolio_df_sorted = portfolio_df.sort_values('Exit Date').copy()
+                portfolio_df_sorted['Cumulative_PnL'] = portfolio_df_sorted['P&L'].cumsum()
+                portfolio_df_sorted['Bankroll'] = starting_capital + portfolio_df_sorted['Cumulative_PnL']
+                
+                # Create bankroll chart
+                fig_bankroll = go.Figure()
+                fig_bankroll.add_trace(go.Scatter(
+                    x=portfolio_df_sorted['Exit Date'],
+                    y=portfolio_df_sorted['Bankroll'],
+                    mode='lines+markers',
+                    name='Bankroll',
+                    line=dict(color='#00FF00', width=2),
+                    marker=dict(size=4)
+                ))
+                fig_bankroll.add_hline(y=starting_capital, line_dash="dash", line_color="yellow", 
+                                      annotation_text="Starting Capital: $25,000")
+                fig_bankroll.update_layout(
+                    title="Portfolio Bankroll Over Time",
+                    xaxis_title="Date",
+                    yaxis_title="Bankroll ($)",
+                    height=400,
+                    hovermode='x unified',
+                    template='plotly_dark'
+                )
+                st.plotly_chart(fig_bankroll, use_container_width=True)
+                
+                ending_bankroll = portfolio_df_sorted['Bankroll'].iloc[-1]
+                max_bankroll = portfolio_df_sorted['Bankroll'].max()
+                min_bankroll = portfolio_df_sorted['Bankroll'].min()
+                max_drawdown = ((min_bankroll - starting_capital) / starting_capital) * 100
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Ending Bankroll", f"${ending_bankroll:,.0f}")
+                col2.metric("Peak Bankroll", f"${max_bankroll:,.0f}")
+                col3.metric("Lowest Point", f"${min_bankroll:,.0f}")
+                col4.metric("Max Drawdown", f"{max_drawdown:.1f}%")
+                
+                st.divider()
+                
+                # MONTHLY ANALYSIS
+                st.subheader("📅 Monthly Trade Activity")
+                
+                portfolio_df['Entry_Month'] = portfolio_df['Entry Date'].dt.to_period('M').astype(str)
+                monthly_stats = portfolio_df.groupby('Entry_Month').agg({
+                    'P&L': ['count', 'sum', 'mean'],
+                    'Capital_At_Risk': ['mean', 'max'],
+                    'Ticker': lambda x: x.nunique()
+                }).round(2)
+                monthly_stats.columns = ['Trades', 'Total P&L', 'Avg P&L per Trade', 'Avg Capital at Risk', 'Max Capital at Risk', 'Tickers Traded']
+                monthly_stats['Monthly Return %'] = ((monthly_stats['Total P&L'] / starting_capital) * 100).round(2)
+                
+                st.dataframe(monthly_stats, use_container_width=True)
+                
+                # Monthly P&L chart
+                fig_monthly = go.Figure()
+                fig_monthly.add_trace(go.Bar(
+                    x=monthly_stats.index,
+                    y=monthly_stats['Total P&L'],
+                    name='Monthly P&L',
+                    marker_color=['green' if x > 0 else 'red' for x in monthly_stats['Total P&L']]
+                ))
+                fig_monthly.update_layout(
+                    title="Monthly P&L",
+                    xaxis_title="Month",
+                    yaxis_title="P&L ($)",
+                    height=350,
+                    template='plotly_dark'
+                )
+                st.plotly_chart(fig_monthly, use_container_width=True)
+                
+                st.divider()
+                
+                # By Ticker Performance
+                st.subheader("📈 Performance by Ticker")
+                ticker_stats = portfolio_df.groupby('Ticker').agg({
+                    'P&L': ['count', 'sum', 'mean'],
+                    'P&L %': 'mean',
+                    'Capital_At_Risk': 'mean'
+                }).round(2)
+                ticker_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %', 'Avg Capital at Risk']
+                ticker_stats = ticker_stats.sort_values('Total P&L', ascending=False)
+                st.dataframe(ticker_stats, use_container_width=True)
+                
+                # Conviction Analysis
+                st.subheader("🎯 Conviction Score Analysis")
+                conviction_stats = portfolio_df.groupby('Conviction').agg({
+                    'P&L': ['count', 'sum', 'mean'],
+                    'P&L %': 'mean',
+                    'Days Held': 'mean',
+                    'Capital_At_Risk': 'mean'
+                }).round(2)
+                conviction_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %', 'Avg Days Held', 'Avg Capital at Risk']
+                st.dataframe(conviction_stats, use_container_width=True)
+                
+                # Signal Type Analysis
+                st.subheader("🔔 Signal Type Performance")
+                signal_stats = portfolio_df.groupby('Signal Type').agg({
+                    'P&L': ['count', 'sum', 'mean'],
+                    'P&L %': 'mean'
+                }).round(2)
+                signal_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %']
+                signal_stats = signal_stats.sort_values('Total P&L', ascending=False)
+                st.dataframe(signal_stats, use_container_width=True)
+                
+                # Complete Trade Log
+                st.subheader("📋 Complete Trade Log")
+                display_cols = ['Entry Date', 'Exit Date', 'Ticker', 'Signal Type', 'Conviction', 'Shares', 
+                               'Entry Price', 'Exit Price', 'P&L', 'P&L %', 'Capital_At_Risk', 'Days Held', 'Exit Reason']
+                st.dataframe(portfolio_df[display_cols], use_container_width=True, height=500)
+                
+                # Download
+                st.download_button(
+                    "Download Complete Portfolio Backtest",
+                    portfolio_df.to_csv(index=False),
+                    "portfolio_backtest_results.csv",
+                    "text/csv"
+                )
+            else:
+                st.info("No trades generated across any tickers in backtest period.")
+
+def display_backtest_results(trades_df, ticker_name):
+    """Display results for single ticker backtest"""
+    # Overall metrics
+    total_pnl = trades_df['P&L'].sum()
+    wins = len(trades_df[trades_df['P&L'] > 0])
+    losses = len(trades_df[trades_df['P&L'] <= 0])
+    win_rate = (wins / len(trades_df) * 100) if len(trades_df) > 0 else 0
+    avg_win = trades_df[trades_df['P&L'] > 0]['P&L'].mean() if wins > 0 else 0
+    avg_loss = trades_df[trades_df['P&L'] <= 0]['P&L'].mean() if losses > 0 else 0
+    
+    # Calculate capital at risk
+    trades_df['Capital_At_Risk'] = trades_df['Entry Price'] * trades_df['Shares']
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total P&L", f"${total_pnl:,.0f}")
+    col2.metric("Trades", len(trades_df))
+    col3.metric("Win Rate", f"{win_rate:.1f}%")
+    col4.metric("Avg Win", f"${avg_win:.0f}")
+    col5.metric("Avg Loss", f"${avg_loss:.0f}")
+    
+    # Conviction Analysis
+    st.subheader("Conviction Score Analysis")
+    conviction_stats = trades_df.groupby('Conviction').agg({
+        'P&L': ['count', 'sum', 'mean'],
+        'P&L %': 'mean',
+        'Days Held': 'mean',
+        'Capital_At_Risk': 'mean'
+    }).round(2)
+    conviction_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %', 'Avg Days Held', 'Avg Capital at Risk']
+    st.dataframe(conviction_stats, use_container_width=True)
+    
+    # Signal Type Analysis
+    st.subheader("Signal Type Performance")
+    signal_stats = trades_df.groupby('Signal Type').agg({
+        'P&L': ['count', 'sum', 'mean'],
+        'P&L %': 'mean'
+    }).round(2)
+    signal_stats.columns = ['Trades', 'Total P&L', 'Avg P&L', 'Avg P&L %']
+    st.dataframe(signal_stats, use_container_width=True)
+    
+    # Trade Log
+    st.subheader("Trade Log")
+    display_cols = ['Entry Date', 'Exit Date', 'Signal Type', 'Conviction', 'Shares', 
+                   'Entry Price', 'Exit Price', 'P&L', 'P&L %', 'Capital_At_Risk', 'Days Held', 'Exit Reason', 'Thesis']
+    st.dataframe(trades_df[display_cols], use_container_width=True, height=400)
+    
+    # Download
+    st.download_button(
+        "Download Backtest Results",
+        trades_df.to_csv(index=False),
+        f"{ticker_name}_backtest_results.csv",
+        "text/csv"
+    )
 
 # Sample Trades, Trade Tracker, Performance, Glossary, Settings remain similar to original
 # ... (keeping the rest of the pages as in the original file for brevity)
