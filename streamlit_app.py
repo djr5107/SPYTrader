@@ -1,9 +1,5 @@
-# streamlit_app_COMPLETE_FIXED.py - SPY Pro v3.0 COMPLETE & FIXED
+# streamlit_app_COMPLETE.py - SPY Pro v3.0 COMPLETE
 # Full featured trading system with backtest, live trading, signal history, and persistent storage
-# FIXES:
-# 1. Removed duplicate MARKET_ETFS definition (NameError fixed)
-# 2. Added click-to-navigate from Market Dashboard to Chart Analysis
-# 3. Integrated all 80+ ETFs into Trading Hub for signal generation
 
 import streamlit as st
 import yfinance as yf
@@ -26,9 +22,6 @@ from plotly.subplots import make_subplots
 # ✅ Robust data persistence
 # ✅ Live trading paper/real mode
 # ✅ Performance analytics
-# ✅ FIXED: MARKET_ETFS NameError
-# ✅ NEW: Click-to-navigate functionality
-# ✅ NEW: All 80+ ETFs in Trading Hub
 
 from macro_analysis_CORRECTED import (
     MacroAnalyzer,
@@ -42,9 +35,9 @@ from macro_analysis_CORRECTED import (
     calculate_position_size
 )
 
-st.set_page_config(page_title="SPY Pro v3.0-COMPLETE-FIXED", layout="wide")
-st.title("SPY Pro v3.0 - COMPLETE & FIXED 🚀")
-st.caption("✨ Full Trading System | Backtest | Live Trading | Signal History | All ETFs | Click Navigation")
+st.set_page_config(page_title="SPY Pro v3.0-COMPLETE", layout="wide")
+st.title("SPY Pro v3.0 - COMPLETE 🚀")
+st.caption("✨ Full Trading System | Backtest | Live Trading | Signal History | Persistent Storage")
 
 # Persistent Storage Paths
 DATA_DIR = Path("trading_data")
@@ -55,8 +48,8 @@ SIGNAL_QUEUE_FILE = DATA_DIR / "signal_queue.json"
 SIGNAL_HISTORY_FILE = DATA_DIR / "signal_history.json"
 PERFORMANCE_FILE = DATA_DIR / "performance_metrics.json"
 
-# Legacy Multi-Ticker Support for backwards compatibility
-LEGACY_TICKERS = ["SPY", "SVXY", "QQQ", "EFA", "EEM", "AGG", "TLT"]
+# Multi-Ticker Support
+TICKERS = ["SPY", "SVXY", "QQQ", "EFA", "EEM", "AGG", "TLT"]
 
 # Signal expiration time (minutes) - default
 DEFAULT_SIGNAL_EXPIRATION = 30
@@ -92,112 +85,6 @@ def save_json(filepath, data):
     except Exception as e:
         st.error(f"Error saving {filepath.name}: {e}")
 
-# Market Dashboard ETFs - GLOBAL DEFINITION (ONLY ONE LOCATION)
-# This is the FIX for the NameError - only define once at global scope
-MARKET_ETFS = {
-    "Equities": {
-        "Large Cap": "IVV",
-        "Mid Cap": "IJH",
-        "Small Cap": "IJR",
-        "SMID": "SMMD",
-        "All Cap": "ITOT",
-        "Developed Markets": "EFA",
-        "Emerging Markets": "EEM",
-        "World ex-US": "ACWX",
-        "World": "ACWI"
-    },
-    "Fixed Income": {
-        "Aggregate": "AGG",
-        "Short-Term Treasury": "SHV",
-        "Intermediate Treasury": "IEF",
-        "Long-Term Treasury": "TLT",
-        "TIPS": "TIP",
-        "Investment Grade Corp": "LQD",
-        "High Yield Corporate": "HYG",
-        "Emerging Market Bonds": "EMB",
-        "Municipals": "MUB",
-        "Mortgage-Backed": "MBB",
-        "Floating Rate": "FLOT"
-    },
-    "Real Assets": {
-        "Bitcoin": "IBIT",
-        "Gold": "IAU",
-        "Silver": "SLV",
-        "Commodity Basket": "GSG",
-        "Natural Resources": "IGE",
-        "Oil": "DBO",
-        "Real Estate": "IYR",
-        "Infrastructure": "IGF",
-        "Timber": "WOOD"
-    },
-    "S&P Sectors": {
-        "Communication Services": "XLC",
-        "Consumer Discretionary": "XLY",
-        "Consumer Staples": "XLP",
-        "Energy": "XLE",
-        "Financials": "XLF",
-        "Health Care": "XLV",
-        "Industrials": "XLI",
-        "Materials": "XLB",
-        "Real Estate": "XLRE",
-        "Technology": "XLK",
-        "Utilities": "XLU"
-    },
-    "Developed Markets": {
-        "United States": "SPY",
-        "Canada": "EWC",
-        "United Kingdom": "EWU",
-        "Germany": "EWG",
-        "France": "EWQ",
-        "Italy": "EWI",
-        "Spain": "EWP",
-        "Netherlands": "EWN",
-        "Switzerland": "EWL",
-        "Belgium": "EWK",
-        "Sweden": "EWD",
-        "Japan": "EWJ",
-        "Australia": "EWA",
-        "Hong Kong": "EWH",
-        "Singapore": "EWS",
-        "South Korea": "EWY"
-    },
-    "Emerging Markets": {
-        "China": "MCHI",
-        "India": "INDA",
-        "Brazil": "EWZ",
-        "Mexico": "EWW",
-        "South Africa": "EZA",
-        "Taiwan": "EWT",
-        "Russia": "ERUS",
-        "Turkey": "TUR",
-        "Indonesia": "EIDO",
-        "Thailand": "THD",
-        "Malaysia": "EWM",
-        "Philippines": "EPHE",
-        "Chile": "ECH",
-        "Colombia": "GXG",
-        "Peru": "EPU",
-        "Poland": "EPOL"
-    },
-    "Factors": {
-        "Value": "VLUE",
-        "Momentum": "MTUM",
-        "Quality": "QUAL",
-        "Size (Small Cap)": "SIZE",
-        "Low Volatility": "USMV",
-        "Dividend": "DVY",
-        "Growth": "IVW",
-        "High Dividend": "HDV"
-    }
-}
-
-# Build expanded ticker list including all Market Dashboard ETFs
-ALL_TICKERS = list(set(LEGACY_TICKERS + [etf for category in MARKET_ETFS.values() for etf in category.values()]))
-ALL_TICKERS.sort()
-
-# NEW: Use all ETFs for trading (this enables 80+ ETFs in Trading Hub)
-TICKERS = ALL_TICKERS
-
 # Initialize Session State with Persistent Loading
 def init_session_state():
     """Initialize all session state variables with persistent data"""
@@ -214,82 +101,171 @@ def init_session_state():
     
     # Active Trades
     if 'active_trades' not in st.session_state:
-        st.session_state.active_trades = load_json(ACTIVE_TRADES_FILE, [])
-        # Convert timestamps back to datetime
-        for trade in st.session_state.active_trades:
+        trades_data = load_json(ACTIVE_TRADES_FILE, [])
+        st.session_state.active_trades = []
+        for trade in trades_data:
+            # Convert string timestamp back to datetime
             if 'entry_time' in trade and isinstance(trade['entry_time'], str):
-                trade['entry_time'] = datetime.fromisoformat(trade['entry_time'])
+                try:
+                    trade['entry_time'] = datetime.fromisoformat(trade['entry_time'])
+                except:
+                    continue
+            st.session_state.active_trades.append(trade)
     
-    # Signal Queue
+    # Signal Queue with timestamp conversion
     if 'signal_queue' not in st.session_state:
-        st.session_state.signal_queue = load_json(SIGNAL_QUEUE_FILE, [])
-        # Convert timestamps back to datetime
-        for sig in st.session_state.signal_queue:
+        signal_queue_data = load_json(SIGNAL_QUEUE_FILE, [])
+        st.session_state.signal_queue = []
+        for sig in signal_queue_data:
             if 'timestamp' in sig and isinstance(sig['timestamp'], str):
-                sig['timestamp'] = datetime.fromisoformat(sig['timestamp'])
+                try:
+                    sig['timestamp'] = datetime.fromisoformat(sig['timestamp'])
+                except:
+                    sig['timestamp'] = datetime.now(ZoneInfo("US/Eastern"))
+            elif 'timestamp' not in sig:
+                sig['timestamp'] = datetime.now(ZoneInfo("US/Eastern"))
+            st.session_state.signal_queue.append(sig)
     
     # Signal History
     if 'signal_history' not in st.session_state:
-        st.session_state.signal_history = load_json(SIGNAL_HISTORY_FILE, [])
+        history_data = load_json(SIGNAL_HISTORY_FILE, [])
+        st.session_state.signal_history = []
+        for sig in history_data:
+            if 'timestamp' in sig and isinstance(sig['timestamp'], str):
+                try:
+                    sig['timestamp'] = datetime.fromisoformat(sig['timestamp'])
+                except:
+                    sig['timestamp'] = datetime.now(ZoneInfo("US/Eastern"))
+            if 'expiration' in sig and isinstance(sig['expiration'], str):
+                try:
+                    sig['expiration'] = datetime.fromisoformat(sig['expiration'])
+                except:
+                    pass
+            st.session_state.signal_history.append(sig)
+    
+    # Watchlist
+    if 'watchlist' not in st.session_state:
+        st.session_state.watchlist = []
     
     # Performance Metrics
-    if 'performance' not in st.session_state:
-        st.session_state.performance = load_json(PERFORMANCE_FILE, {
-            'total_pnl': 0,
+    if 'performance_metrics' not in st.session_state:
+        st.session_state.performance_metrics = load_json(PERFORMANCE_FILE, {
             'total_trades': 0,
             'winning_trades': 0,
-            'losing_trades': 0
+            'losing_trades': 0,
+            'total_pnl': 0,
+            'total_risk': 0,
+            'win_rate': 0,
+            'avg_win': 0,
+            'avg_loss': 0,
+            'profit_factor': 0,
+            'daily_pnl': {}
         })
     
     # Macro Analyzer
     if 'macro_analyzer' not in st.session_state:
         st.session_state.macro_analyzer = MacroAnalyzer()
+        try:
+            st.session_state.macro_analyzer.fetch_macro_data()
+        except:
+            pass
     
-    # Last save time
+    # Last save timestamp
     if 'last_save' not in st.session_state:
         st.session_state.last_save = datetime.now()
-    
-    # NEW: Navigation state for click-to-chart functionality
-    if 'nav_to_chart' not in st.session_state:
-        st.session_state.nav_to_chart = False
-    if 'chart_ticker' not in st.session_state:
-        st.session_state.chart_ticker = 'SPY'
 
+# Initialize everything
 init_session_state()
+
+# Settings (Sidebar)
+with st.sidebar:
+    st.header("⚙️ Settings")
+    
+    # Trading Mode
+    st.subheader("Trading Mode")
+    TRADING_MODE = st.radio("Mode", ["Paper Trading", "Live Trading"], help="Paper = Simulated, Live = Real money")
+    
+    # Signal Generation Settings
+    st.subheader("Signal Generation")
+    MIN_CONVICTION = st.slider("Min Conviction", 1, 10, 5, help="Minimum conviction level to show signals")
+    ENABLE_MACRO_FILTER = st.checkbox("Macro Signal Filter", value=True, help="Use macro conditions to filter signals")
+    USE_DYNAMIC_STOPS = st.checkbox("Dynamic Position Sizing", value=True, help="Adjust position size based on conviction")
+    SIGNAL_EXPIRATION_MINUTES = st.slider("Signal Expiration (min)", 10, 120, DEFAULT_SIGNAL_EXPIRATION, help="Minutes before signal expires")
+    
+    # V3.0: New signal types toggles
+    st.subheader("Signal Types")
+    ENABLE_CONTINUATION_SIGNALS = st.checkbox("Continuation Signals", value=True, help="Add to existing trends")
+    ENABLE_SUPPORT_RESISTANCE = st.checkbox("Support/Resistance", value=True, help="Bounce signals at key levels")
+    ENABLE_OPTIONS_SIGNALS = st.checkbox("Options Signals", value=True, help="Options trade opportunities")
+    ENABLE_TREND_FOLLOWING = st.checkbox("Trend Following", value=True, help="Follow strong trends")
+    ENABLE_MEAN_REVERSION = st.checkbox("Mean Reversion", value=True, help="Bollinger band bounces")
+    
+    # Stop Loss Settings
+    st.subheader("Risk Management")
+    STOP_LOSS_PCT = st.slider("Stop Loss %", -5.0, -0.5, -2.0, 0.5)
+    TRAILING_STOP_PCT = st.slider("Trailing Stop %", 0.5, 3.0, 1.0, 0.5)
+    
+    # Data Persistence
+    st.subheader("Data Management")
+    if st.button("💾 Force Save All Data"):
+        save_all_data()
+        st.success("✅ All data saved!")
+    
+    if st.button("🗑️ Clear All History"):
+        if st.checkbox("Confirm clear all"):
+            st.session_state.signal_history = []
+            st.session_state.trade_log = pd.DataFrame(columns=['Timestamp', 'Type', 'Symbol', 'Action', 'Size', 'Entry', 'Exit', 'P&L'])
+            save_all_data()
+            st.success("History cleared!")
+    
+    st.divider()
+    st.caption(f"SPY Pro v3.0 | {TRADING_MODE}")
+    st.caption(f"Last Save: {st.session_state.last_save.strftime('%H:%M:%S')}")
 
 # Save all data function
 def save_all_data():
-    """Save all persistent data"""
-    # Trade Log
-    trade_log_data = st.session_state.trade_log.to_dict('records')
-    save_json(TRADE_LOG_FILE, trade_log_data)
-    
-    # Active Trades (convert datetime to string)
-    active_trades = []
-    for trade in st.session_state.active_trades:
-        trade_copy = trade.copy()
-        if 'entry_time' in trade_copy and isinstance(trade_copy['entry_time'], datetime):
-            trade_copy['entry_time'] = trade_copy['entry_time'].isoformat()
-        active_trades.append(trade_copy)
-    save_json(ACTIVE_TRADES_FILE, active_trades)
-    
-    # Signal Queue (convert datetime to string)
-    signal_queue = []
-    for sig in st.session_state.signal_queue:
-        sig_copy = sig.copy()
-        if 'timestamp' in sig_copy and isinstance(sig_copy['timestamp'], datetime):
-            sig_copy['timestamp'] = sig_copy['timestamp'].isoformat()
-        signal_queue.append(sig_copy)
-    save_json(SIGNAL_QUEUE_FILE, signal_queue)
-    
-    # Signal History
-    save_json(SIGNAL_HISTORY_FILE, st.session_state.signal_history)
-    
-    # Performance
-    save_json(PERFORMANCE_FILE, st.session_state.performance)
-    
-    # Update last save time
-    st.session_state.last_save = datetime.now()
+    """Save all session data to disk"""
+    try:
+        # Save trade log
+        save_json(TRADE_LOG_FILE, st.session_state.trade_log.to_dict('records'))
+        
+        # Save active trades with datetime conversion
+        trades_to_save = []
+        for trade in st.session_state.active_trades:
+            trade_copy = trade.copy()
+            if isinstance(trade_copy.get('entry_time'), datetime):
+                trade_copy['entry_time'] = trade_copy['entry_time'].isoformat()
+            trades_to_save.append(trade_copy)
+        save_json(ACTIVE_TRADES_FILE, trades_to_save)
+        
+        # Save signal queue with datetime conversion
+        signals_to_save = []
+        for sig in st.session_state.signal_queue:
+            sig_copy = sig.copy()
+            if isinstance(sig_copy.get('timestamp'), datetime):
+                sig_copy['timestamp'] = sig_copy['timestamp'].isoformat()
+            signals_to_save.append(sig_copy)
+        save_json(SIGNAL_QUEUE_FILE, signals_to_save)
+        
+        # Save signal history
+        history_to_save = []
+        for sig in st.session_state.signal_history:
+            sig_copy = sig.copy()
+            if isinstance(sig_copy.get('timestamp'), datetime):
+                sig_copy['timestamp'] = sig_copy['timestamp'].isoformat()
+            if isinstance(sig_copy.get('expiration'), datetime):
+                sig_copy['expiration'] = sig_copy['expiration'].isoformat()
+            history_to_save.append(sig_copy)
+        save_json(SIGNAL_HISTORY_FILE, history_to_save)
+        
+        # Save performance metrics
+        save_json(PERFORMANCE_FILE, st.session_state.performance_metrics)
+        
+        # Update last save time
+        st.session_state.last_save = datetime.now()
+        
+    except Exception as e:
+        st.error(f"Error saving data: {e}")
 
 # Auto-save every 5 minutes
 if (datetime.now() - st.session_state.last_save).total_seconds() > 300:
@@ -310,12 +286,11 @@ def is_market_open():
     
     return market_open <= now <= market_close
 
-# Fetch market data - updated to show first 7 tickers for display
+# Fetch market data
 @st.cache_data(ttl=60)
 def fetch_market_data():
     data = {}
-    # Get first 7 legacy tickers for overview display
-    for ticker in LEGACY_TICKERS:
+    for ticker in TICKERS:
         try:
             t = yf.Ticker(ticker)
             hist = t.history(period="2d", interval="1d")
@@ -482,9 +457,9 @@ def expire_old_signals():
     
     return len(expired)
 
-# V3.0: ENHANCED SIGNAL GENERATION
+# V3.0: ENHANCED SIGNAL GENERATION (same as before but with better error handling)
 def generate_signal():
-    """Enhanced signal generation - now works across all 80+ ETFs"""
+    """Enhanced signal generation with more liberal conditions"""
     now = datetime.now(ZoneInfo("US/Eastern"))
     now_str = now.strftime("%m/%d %H:%M")
     
@@ -519,7 +494,7 @@ def generate_signal():
         vix_elevated = False
         vix_current = 15
     
-    # Analyze each ticker - NOW ANALYZES ALL TICKERS (80+)
+    # Analyze each ticker
     for ticker in TICKERS:
         try:
             t = yf.Ticker(ticker)
@@ -555,7 +530,7 @@ def generate_signal():
             
             signal = None
             
-            # SVXY Volatility Signals
+            # SVXY Volatility Signals (same as enhanced version)
             if ticker == "SVXY" and len(df) >= 5:
                 five_day_drop = ((current_price - df['Close'].iloc[-6]) / df['Close'].iloc[-6]) * 100
                 
@@ -574,65 +549,80 @@ def generate_signal():
                         'strategy': f'{ticker} Mean Reversion - Vol Spike',
                         'thesis': f"VOL SPIKE RECOVERY: SVXY dropped {five_day_drop:.1f}% in 5 days. Mean reversion at ${current_price:.2f}. Vol {volume_ratio:.1f}x. VIX: {vix_current:.1f}",
                         'conviction': 8,
-                        'signal_type': 'Mean Reversion'
+                        'signal_type': 'SVXY Vol Spike Recovery'
                     }
-            
-            # Golden Cross (50/200 SMA)
-            if not signal and 50 in sma_values and 200 in sma_values:
-                prev_50 = df['SMA_50'].iloc[-2]
-                prev_200 = df['SMA_200'].iloc[-2]
                 
-                if (sma_values[50] > sma_values[200] and 
-                    prev_50 <= prev_200 and 
-                    current_price > sma_values[50]):
-                    
+                elif (len(df) >= 2 and df['Close'].pct_change().iloc[-2] < -0.03 and 
+                      price_change_pct > 0.5 and volume_ratio > 1.2):
                     signal = {
                         'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
                         'timestamp': now,
                         'time': now_str,
-                        'type': 'Golden Cross',
-                        'symbol': ticker,
-                        'action': f"BUY 20 shares @ ${current_price:.2f}",
-                        'size': 20,
-                        'entry_price': current_price,
-                        'max_hold': None,
-                        'dte': 0,
-                        'strategy': f'{ticker} Golden Cross',
-                        'thesis': f"GOLDEN CROSS: SMA50 crossed above SMA200. Strong bullish signal at ${current_price:.2f}",
-                        'conviction': 9,
-                        'signal_type': 'Golden Cross'
-                    }
-            
-            # SMA 10/20 Cross
-            if not signal and 10 in sma_values and 20 in sma_values:
-                prev_10 = df['SMA_10'].iloc[-2]
-                prev_20 = df['SMA_20'].iloc[-2]
-                
-                if (sma_values[10] > sma_values[20] and 
-                    prev_10 <= prev_20 and 
-                    current_price > sma_values[10] and 
-                    volume_ratio > 1.2):
-                    
-                    signal = {
-                        'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
-                        'timestamp': now,
-                        'time': now_str,
-                        'type': 'SMA 10/20 Cross',
+                        'type': 'SVXY Sharp Drop Bounce',
                         'symbol': ticker,
                         'action': f"BUY 15 shares @ ${current_price:.2f}",
                         'size': 15,
                         'entry_price': current_price,
                         'max_hold': None,
                         'dte': 0,
-                        'strategy': f'{ticker} Short-term Momentum',
-                        'thesis': f"SMA CROSS: SMA10 crossed above SMA20 with volume {volume_ratio:.1f}x",
+                        'strategy': f'{ticker} Mean Reversion - Bounce',
+                        'thesis': f"SHARP DROP RECOVERY: SVXY bouncing +{price_change_pct:.1f}% after yesterday's {df['Close'].pct_change().iloc[-2]*100:.1f}% drop.",
                         'conviction': 7,
-                        'signal_type': 'SMA Cross'
+                        'signal_type': 'SVXY Sharp Drop Bounce'
+                    }
+            
+            # SMA Uptrend Signals (already crossed, not just today)
+            if not signal and (10 in sma_values and 20 in sma_values):
+                sma_10 = sma_values[10]
+                sma_20 = sma_values[20]
+                
+                if (sma_10 > sma_20 and current_price > sma_10 and volume_ratio > 1.1):
+                    signal = {
+                        'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                        'timestamp': now,
+                        'time': now_str,
+                        'type': 'SMA 10/20 Uptrend',
+                        'symbol': ticker,
+                        'action': f"BUY 15 shares @ ${current_price:.2f}",
+                        'size': 15,
+                        'entry_price': current_price,
+                        'max_hold': None,
+                        'dte': 0,
+                        'strategy': f'{ticker} Long - SMA Uptrend',
+                        'thesis': f"UPTREND: {ticker} above SMA10 (${sma_10:.2f}) and SMA20 (${sma_20:.2f}). Price ${current_price:.2f}, Vol {volume_ratio:.1f}x, RSI {rsi:.0f}.",
+                        'conviction': 7,
+                        'signal_type': 'SMA Uptrend'
+                    }
+            
+            # Golden Cross (already crossed)
+            if not signal and (50 in sma_values and 200 in sma_values):
+                sma_50 = sma_values[50]
+                sma_200 = sma_values[200]
+                
+                if (sma_50 > sma_200 and current_price > sma_50 and macd > 0 and adx > 15):
+                    signal = {
+                        'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                        'timestamp': now,
+                        'time': now_str,
+                        'type': 'Golden Cross Trend',
+                        'symbol': ticker,
+                        'action': f"BUY 20 shares @ ${current_price:.2f}",
+                        'size': 20,
+                        'entry_price': current_price,
+                        'max_hold': None,
+                        'dte': 0,
+                        'strategy': f'{ticker} Long - Golden Cross',
+                        'thesis': f"GOLDEN CROSS: {ticker} in golden cross (50>200). Price ${current_price:.2f} above SMA50, MACD bullish, ADX {adx:.1f}.",
+                        'conviction': 9,
+                        'signal_type': 'Golden Cross'
                     }
             
             # Volume Breakout
-            if not signal and volume_ratio > 1.5 and price_change_pct > 0.3:
-                if 20 in sma_values and current_price > sma_values[20]:
+            if not signal and (20 in sma_values):
+                sma_20 = sma_values[20]
+                
+                if (volume_ratio > 1.5 and price_change_pct > 0.5 and 
+                    current_price > sma_20 and rsi > 50 and rsi < 75):
                     signal = {
                         'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
                         'timestamp': now,
@@ -644,36 +634,92 @@ def generate_signal():
                         'entry_price': current_price,
                         'max_hold': None,
                         'dte': 0,
-                        'strategy': f'{ticker} Volume Breakout',
-                        'thesis': f"VOLUME BREAKOUT: {volume_ratio:.1f}x avg volume with +{price_change_pct:.2f}% move",
+                        'strategy': f'{ticker} Long - Volume Breakout',
+                        'thesis': f"VOLUME BREAKOUT: {ticker} ${current_price:.2f} with strong volume ({volume_ratio:.1f}x), +{price_change_pct:.1f}% move. RSI {rsi:.0f}.",
                         'conviction': 7,
                         'signal_type': 'Volume Breakout'
                     }
             
-            # Oversold Bounce
-            if not signal and rsi < 35 and stoch_k < 30:
-                if rsi > df['RSI'].iloc[-2]:  # RSI starting to rise
+            # Continuation Signals
+            if not signal and ENABLE_CONTINUATION_SIGNALS and (10 in sma_values and 20 in sma_values and 50 in sma_values):
+                sma_10 = sma_values[10]
+                sma_20 = sma_values[20]
+                sma_50 = sma_values[50]
+                
+                price_near_10_sma = abs(current_price - sma_10) / sma_10 < 0.02
+                
+                if (sma_10 > sma_20 > sma_50 and price_near_10_sma and rsi > 40 and rsi < 60):
                     signal = {
                         'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
                         'timestamp': now,
                         'time': now_str,
-                        'type': 'Oversold Bounce',
+                        'type': 'Trend Continuation',
+                        'symbol': ticker,
+                        'action': f"BUY 15 shares @ ${current_price:.2f}",
+                        'size': 15,
+                        'entry_price': current_price,
+                        'max_hold': None,
+                        'dte': 0,
+                        'strategy': f'{ticker} Long - Add to Winner',
+                        'thesis': f"CONTINUATION: {ticker} in uptrend, pullback to 10-SMA (${sma_10:.2f}). Add at ${current_price:.2f}, RSI {rsi:.0f}.",
+                        'conviction': 8,
+                        'signal_type': 'Continuation'
+                    }
+            
+            # Support/Resistance
+            if not signal and ENABLE_SUPPORT_RESISTANCE and 'S1' in df.columns:
+                s1 = df['S1'].iloc[-1]
+                price_near_support = abs(current_price - s1) / s1 < 0.005
+                
+                if (price_near_support and price_change_pct > 0.3 and rsi > 30 and rsi < 50):
+                    signal = {
+                        'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                        'timestamp': now,
+                        'time': now_str,
+                        'type': 'Support Bounce',
                         'symbol': ticker,
                         'action': f"BUY 12 shares @ ${current_price:.2f}",
                         'size': 12,
                         'entry_price': current_price,
                         'max_hold': None,
                         'dte': 0,
-                        'strategy': f'{ticker} Mean Reversion',
-                        'thesis': f"OVERSOLD BOUNCE: RSI {rsi:.0f}, Stoch {stoch_k:.0f}. Both oversold.",
-                        'conviction': 7,
-                        'signal_type': 'Oversold'
+                        'strategy': f'{ticker} Long - Support Bounce',
+                        'thesis': f"SUPPORT: {ticker} bouncing at S1 (${s1:.2f}). Price ${current_price:.2f}, RSI {rsi:.0f}, +{price_change_pct:.1f}% reversal.",
+                        'conviction': 6,
+                        'signal_type': 'Support Bounce'
                     }
             
-            # Mean Reversion (Bollinger Bands)
-            if not signal and 'BB_Lower' in df.columns:
+            # Trend Following
+            if not signal and ENABLE_TREND_FOLLOWING and all(p in sma_values for p in [10, 20, 50, 200]):
+                sma_10 = sma_values[10]
+                sma_20 = sma_values[20]
+                sma_50 = sma_values[50]
+                sma_200 = sma_values[200]
+                
+                all_aligned = (current_price > sma_10 > sma_20 > sma_50 > sma_200)
+                
+                if (all_aligned and adx > 20 and rsi > 50 and rsi < 70):
+                    signal = {
+                        'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                        'timestamp': now,
+                        'time': now_str,
+                        'type': 'Strong Trend',
+                        'symbol': ticker,
+                        'action': f"BUY 18 shares @ ${current_price:.2f}",
+                        'size': 18,
+                        'entry_price': current_price,
+                        'max_hold': None,
+                        'dte': 0,
+                        'strategy': f'{ticker} Long - Trend Following',
+                        'thesis': f"STRONG TREND: {ticker} all SMAs aligned. ADX {adx:.1f}, RSI {rsi:.0f}. Momentum continues.",
+                        'conviction': 9,
+                        'signal_type': 'Strong Trend'
+                    }
+            
+            # Mean Reversion
+            if not signal and ENABLE_MEAN_REVERSION and 'BB_Lower' in df.columns and 'RSI' in df.columns:
                 bb_lower = df['BB_Lower'].iloc[-1]
-                if current_price <= bb_lower * 1.01 and rsi < 40 and price_change_pct > 0:
+                if (current_price <= bb_lower * 1.01 and rsi < 40 and price_change_pct > 0):
                     signal = {
                         'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
                         'timestamp': now,
@@ -685,100 +731,155 @@ def generate_signal():
                         'entry_price': current_price,
                         'max_hold': None,
                         'dte': 0,
-                        'strategy': f'{ticker} BB Bounce',
-                        'thesis': f"BB BOUNCE: Price at lower band (${bb_lower:.2f}), RSI {rsi:.0f}",
+                        'strategy': f'{ticker} Long - Mean Reversion',
+                        'thesis': f"MEAN REVERSION: Price ${current_price:.2f} at lower BB (${bb_lower:.2f}), RSI {rsi:.0f}. Statistical bounce.",
                         'conviction': 7,
                         'signal_type': 'Mean Reversion'
                     }
             
-            # Add signal if found and meets min conviction
-            if signal and signal['conviction'] >= MIN_CONVICTION:
-                # Check if already have signal for this ticker
-                if not any(s['symbol'] == ticker for s in st.session_state.signal_queue):
+            # Oversold Bounce
+            if not signal and (rsi < 30 and price_change_pct > 0.2 and 20 in sma_values):
+                sma_20 = sma_values[20]
+                signal = {
+                    'id': f"SIG-{ticker}-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                    'timestamp': now,
+                    'time': now_str,
+                    'type': 'Oversold Bounce',
+                    'symbol': ticker,
+                    'action': f"BUY 12 shares @ ${current_price:.2f}",
+                    'size': 12,
+                    'entry_price': current_price,
+                    'max_hold': None,
+                    'dte': 0,
+                    'strategy': f'{ticker} Long - Oversold Bounce',
+                    'thesis': f"OVERSOLD: {ticker} ${current_price:.2f} reversing (RSI {rsi:.0f}). +{price_change_pct:.1f}% bounce.",
+                    'conviction': 6,
+                    'signal_type': 'Oversold Bounce'
+                }
+            
+            # Options Signals
+            if not signal and ENABLE_OPTIONS_SIGNALS:
+                try:
+                    options_df = get_options_chain(ticker, dte_min=14, dte_max=45)
+                    
+                    if not options_df.empty and 20 in sma_values and 'impliedVolatility' in options_df.columns:
+                        sma_20 = sma_values[20]
+                        avg_iv = options_df[options_df['type'] == 'Put']['impliedVolatility'].mean()
+                        
+                        if avg_iv > 0.25 and current_price > sma_20 and rsi > 45:
+                            puts = options_df[options_df['type'] == 'Put'].copy()
+                            puts['strike_diff'] = abs(puts['strike'] - current_price)
+                            atm_put = puts.nsmallest(1, 'strike_diff').iloc[0]
+                            
+                            signal = {
+                                'id': f"SIG-{ticker}-OPT-{len(st.session_state.signal_queue)+1}-{datetime.now().strftime('%H%M%S')}",
+                                'timestamp': now,
+                                'time': now_str,
+                                'type': 'Options: Put Credit Spread',
+                                'symbol': ticker,
+                                'action': f"SELL {ticker} Put Spread ${atm_put['strike']:.0f}/${atm_put['strike']-5:.0f}",
+                                'size': 1,
+                                'entry_price': atm_put['mid'],
+                                'max_hold': None,
+                                'dte': int(atm_put['dte']),
+                                'strategy': f'{ticker} Options - Put Credit Spread',
+                                'thesis': f"HIGH IV: {ticker} IV={avg_iv:.1%}, price ${current_price:.2f} above support. Sell ${atm_put['strike']:.0f}P DTE {int(atm_put['dte'])}.",
+                                'conviction': 7,
+                                'signal_type': 'Options Put Spread'
+                            }
+                except:
+                    pass
+            
+            # Apply filters and add signal
+            if signal:
+                if ENABLE_MACRO_FILTER:
+                    signal = adjust_signal_for_macro(signal, regime, df)
+                
+                if signal and should_take_signal(signal, MIN_CONVICTION):
+                    if USE_DYNAMIC_STOPS:
+                        signal['size'] = calculate_position_size(signal)
+                        if 'shares' in signal['action']:
+                            signal['action'] = f"BUY {signal['size']} shares @ ${signal['entry_price']:.2f}"
+                    
                     st.session_state.signal_queue.append(signal)
-                    st.session_state.signal_history.append(signal)
+                    
+                    # Add to history
+                    sig_history = signal.copy()
+                    sig_history['status'] = 'Active'
+                    st.session_state.signal_history.append(sig_history)
+                    
                     save_all_data()
-                    return True
+                    break
                     
         except Exception as e:
             continue
-    
-    return False
 
-# Simulate exits for active trades
+# Auto-Exit Logic
 def simulate_exit():
-    """Check and execute exit conditions for active trades"""
-    if not st.session_state.active_trades:
-        return
-    
+    """Exit trades based on stop loss, trailing stop, momentum reversal"""
     now = datetime.now(ZoneInfo("US/Eastern"))
     
     for trade in st.session_state.active_trades[:]:
-        try:
-            ticker = yf.Ticker(trade['symbol'])
-            current_price = ticker.history(period="1d")['Close'].iloc[-1]
-            
-            entry_price = trade['entry_price'] if 'entry_price' in trade else trade.get('entry', 0)
-            minutes_held = (now - trade['entry_time']).total_seconds() / 60
-            gain_pct = ((current_price - entry_price) / entry_price) * 100
-            
-            exit_triggered = False
-            exit_reason = ""
-            
-            # Time-based exit
-            max_hold = trade.get('max_hold', 240)
-            if minutes_held >= max_hold:
-                exit_triggered = True
-                exit_reason = f"Time limit ({max_hold} min)"
-            
-            # Profit target (5%)
-            elif gain_pct >= 5.0:
-                exit_triggered = True
-                exit_reason = "Profit target (5%)"
-            
-            # Stop loss (2%)
-            elif gain_pct <= -2.0:
-                exit_triggered = True
-                exit_reason = "Stop loss (2%)"
-            
-            if exit_triggered:
-                # Calculate P&L
-                exit_price = current_price
-                minutes_held = (now - trade['entry_time']).total_seconds() / 60
-                
-                if 'SELL SHORT' in trade['action'] or 'Short' in trade.get('strategy', ''):
-                    pnl = (entry_price - exit_price) * trade['size']
-                    close_action = 'Buy to Cover'
-                else:
-                    pnl = (exit_price - entry_price) * trade['size']
-                    close_action = 'Sell'
-                
-                log_trade(
-                    ts=now.strftime("%m/%d %H:%M"),
-                    typ="Close",
-                    sym=trade['symbol'],
-                    action=close_action,
-                    size=trade['size'],
-                    entry=f"${entry_price:.2f}",
-                    exit=f"${exit_price:.2f}",
-                    pnl=f"${pnl:.0f}",
-                    status=f"Closed ({exit_reason})",
-                    sig_id=trade['signal_id'],
-                    entry_numeric=entry_price,
-                    exit_numeric=exit_price,
-                    pnl_numeric=pnl,
-                    dte=trade.get('dte'),
-                    strategy=trade.get('strategy'),
-                    thesis=trade.get('thesis'),
-                    max_hold=trade.get('max_hold'),
-                    actual_hold=minutes_held,
-                    conviction=trade.get('conviction'),
-                    signal_type=trade.get('signal_type')
-                )
-                st.session_state.active_trades.remove(trade)
+        current_price = market_data[trade['symbol']]['price']
+        entry_price = trade['entry_price']
         
-        except Exception as e:
-            continue
+        if 'SELL SHORT' in trade['action'] or 'Short' in trade.get('strategy', ''):
+            pnl_pct = ((entry_price - current_price) / entry_price) * 100
+        else:
+            pnl_pct = ((current_price - entry_price) / entry_price) * 100
+        
+        exit_triggered = False
+        exit_reason = ""
+        
+        # Stop Loss
+        if pnl_pct <= STOP_LOSS_PCT:
+            exit_triggered = True
+            exit_reason = f"Stop Loss ({STOP_LOSS_PCT:.1f}%)"
+        
+        # Trailing Stop
+        elif pnl_pct >= 4.0:
+            max_pnl_reached = trade.get('max_pnl_reached', pnl_pct)
+            if pnl_pct > max_pnl_reached:
+                trade['max_pnl_reached'] = pnl_pct
+            elif (max_pnl_reached - pnl_pct) >= TRAILING_STOP_PCT:
+                exit_triggered = True
+                exit_reason = f"Trailing Stop (from +{max_pnl_reached:.1f}% to +{pnl_pct:.1f}%)"
+        
+        # Execute exit
+        if exit_triggered:
+            exit_price = current_price
+            minutes_held = (now - trade['entry_time']).total_seconds() / 60
+            
+            if 'SELL SHORT' in trade['action'] or 'Short' in trade.get('strategy', ''):
+                pnl = (entry_price - exit_price) * trade['size']
+                close_action = 'Buy to Cover'
+            else:
+                pnl = (exit_price - entry_price) * trade['size']
+                close_action = 'Sell'
+            
+            log_trade(
+                ts=now.strftime("%m/%d %H:%M"),
+                typ="Close",
+                sym=trade['symbol'],
+                action=close_action,
+                size=trade['size'],
+                entry=f"${entry_price:.2f}",
+                exit=f"${exit_price:.2f}",
+                pnl=f"${pnl:.0f}",
+                status=f"Closed ({exit_reason})",
+                sig_id=trade['signal_id'],
+                entry_numeric=entry_price,
+                exit_numeric=exit_price,
+                pnl_numeric=pnl,
+                dte=trade.get('dte'),
+                strategy=trade.get('strategy'),
+                thesis=trade.get('thesis'),
+                max_hold=trade.get('max_hold'),
+                actual_hold=minutes_held,
+                conviction=trade.get('conviction'),
+                signal_type=trade.get('signal_type')
+            )
+            st.session_state.active_trades.remove(trade)
     
     save_all_data()
 
@@ -821,174 +922,29 @@ def get_options_chain(symbol="SPY", dte_min=7, dte_max=60):
     except:
         return pd.DataFrame()
 
-# Market Dashboard Helper Functions
-@st.cache_data(ttl=300)  # 5-minute cache
-def fetch_multi_period_performance(market_etfs):
-    """Fetch performance for multiple time periods"""
-    periods = {
-        '1D': '1d',
-        '5D': '5d',
-        '1M': '1mo',
-        'YTD': 'ytd',
-        '1Y': '1y',
-        '3Y': '3y'
-    }
-    
-    results = {}
-    
-    for category, etf_dict in market_etfs.items():
-        category_data = []
-        
-        for name, ticker in etf_dict.items():
-            try:
-                t = yf.Ticker(ticker)
-                row_data = {'Name': name, 'ETF': ticker}
-                
-                for period_name, period_code in periods.items():
-                    try:
-                        hist = t.history(period=period_code)
-                        if not hist.empty and len(hist) >= 2:
-                            start_price = hist['Close'].iloc[0]
-                            end_price = hist['Close'].iloc[-1]
-                            ret = ((end_price - start_price) / start_price) * 100
-                            row_data[period_name] = ret
-                        else:
-                            row_data[period_name] = None
-                    except:
-                        row_data[period_name] = None
-                
-                category_data.append(row_data)
-            except:
-                continue
-        
-        if category_data:
-            results[category] = pd.DataFrame(category_data)
-    
-    return results
-
-@st.cache_data(ttl=300)
-def fetch_custom_period_performance(market_etfs, start_date, end_date):
-    """Fetch performance for custom date range"""
-    results = {}
-    
-    for category, etf_dict in market_etfs.items():
-        category_data = []
-        
-        for name, ticker in etf_dict.items():
-            try:
-                t = yf.Ticker(ticker)
-                hist = t.history(start=start_date, end=end_date)
-                
-                if not hist.empty and len(hist) >= 2:
-                    start_price = hist['Close'].iloc[0]
-                    end_price = hist['Close'].iloc[-1]
-                    ret = ((end_price - start_price) / start_price) * 100
-                    
-                    category_data.append({
-                        'Name': name,
-                        'ETF': ticker,
-                        'Return': ret
-                    })
-            except:
-                continue
-        
-        if category_data:
-            results[category] = pd.DataFrame(category_data)
-    
-    return results
-
-def get_color_from_return(value):
-    """Return background and text color based on return value"""
-    if pd.isna(value):
-        return '#2a2a2a', '#888888'
-    
-    if value >= 10:
-        return '#006400', '#FFFFFF'
-    elif value >= 5:
-        return '#228B22', '#FFFFFF'
-    elif value >= 0:
-        return '#90EE90', '#000000'
-    elif value >= -5:
-        return '#FFB6C1', '#000000'
-    elif value >= -10:
-        return '#DC143C', '#FFFFFF'
-    else:
-        return '#8B0000', '#FFFFFF'
-
 # Navigation menu
 selected = option_menu(
     menu_title=None,
     options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Macro Dashboard"],
-    icons=["bar-chart", "globe", "clock-history", "graph-up", "list-task", "trophy", "graph-up-arrow", "cash-stack", "speedometer"],
+    icons=["activity", "speedometer2", "clock-history", "graph-up-arrow", "list-ul", "trophy", "bar-chart", "currency-exchange", "globe"],
     menu_icon="cast",
     default_index=0,
     orientation="horizontal"
 )
 
-# Sidebar configuration
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    # Trading settings
-    st.subheader("Trading Settings")
-    TRADING_MODE = st.radio("Trading Mode", ["PAPER", "REAL"], index=0)
-    SIGNAL_EXPIRATION_MINUTES = st.number_input("Signal Expiration (min)", value=DEFAULT_SIGNAL_EXPIRATION, min_value=5, max_value=180, step=5)
-    MIN_CONVICTION = st.slider("Min Conviction", 0.0, 1.0, 0.60, 0.05)
-    USE_DYNAMIC_STOPS = st.checkbox("Dynamic Position Sizing", value=True, help="Adjust position size based on conviction")
-    
-    st.divider()
-    
-    # Signal Generation Config
-    st.subheader("Signal Generation")
-    SIGNAL_FREQUENCY = st.slider("Signal Check Frequency", 1, 10, 3, help="How many signals to attempt generating per run")
-    USE_MACRO_FILTER = st.checkbox("Use Macro Filter", value=True, help="Filter signals based on macro conditions")
-    
-    st.divider()
-    
-    # Backtest settings
-    st.subheader("Backtest Settings")
-    BACKTEST_CAPITAL = st.number_input("Starting Capital ($)", value=100000, min_value=10000, step=10000)
-    BACKTEST_POSITION_SIZE = st.slider("Position Size (%)", 1, 100, 20, 1)
-    
-    st.divider()
-    
-    # Data management
-    st.subheader("Data Management")
-    if st.button("🗑️ Clear All Data", type="secondary"):
-        if st.button("⚠️ Confirm Clear All"):
-            st.session_state.trade_log = pd.DataFrame(columns=[
-                'Timestamp', 'Type', 'Symbol', 'Action', 'Size', 'Entry', 'Exit', 'P&L', 
-                'Status', 'Signal ID', 'Entry Price Numeric', 'Exit Price Numeric', 
-                'P&L Numeric', 'DTE', 'Strategy', 'Thesis', 'Max Hold Minutes', 'Actual Hold Minutes',
-                'Conviction', 'Signal Type'
-            ])
-            st.session_state.active_trades = []
-            st.session_state.signal_queue = []
-            st.session_state.signal_history = []
-            st.session_state.performance = {
-                'total_pnl': 0,
-                'total_trades': 0,
-                'winning_trades': 0,
-                'losing_trades': 0
-            }
-            save_all_data()
-            st.success("All data cleared!")
-            st.rerun()
-
 # ========================================
-# TRADING HUB - NOW WITH ALL ETFs
+# TRADING HUB
 # ========================================
 
 if selected == "Trading Hub":
-    st.header("Trading Hub - Multi-Asset Analysis")
-    st.caption(f"🎯 Monitoring {len(TICKERS)} ETFs across all asset classes, sectors, and countries")
+    st.header("Trading Hub - Multi-Ticker Analysis")
     
-    # Market Overview - show first 7 legacy tickers for display
-    st.subheader("Core Tickers Overview")
-    cols = st.columns(7)
-    for i, ticker in enumerate(LEGACY_TICKERS):
+    # Market Overview
+    st.subheader("Market Overview")
+    cols = st.columns(len(TICKERS))
+    for i, ticker in enumerate(TICKERS):
         with cols[i]:
-            data = market_data.get(ticker, {'price': 0, 'change': 0, 'change_pct': 0, 'volume': 0})
+            data = market_data[ticker]
             change_color = "green" if data['change'] >= 0 else "red"
             st.markdown(f"""
             <div style="background:#1e1e1e;padding:15px;border-radius:10px;text-align:center;">
@@ -1009,23 +965,14 @@ if selected == "Trading Hub":
     **Mode:** {TRADING_MODE}  
     **Active Signals:** {len(st.session_state.signal_queue)}  
     **Active Trades:** {len(st.session_state.active_trades)}  
-    **Signal Expiration:** {SIGNAL_EXPIRATION_MINUTES} minutes  
-    **Total Tickers Monitored:** {len(TICKERS)} ETFs
+    **Signal Expiration:** {SIGNAL_EXPIRATION_MINUTES} minutes
     """)
     
     # Control buttons
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("🔄 Generate Signals", use_container_width=True):
-            with st.spinner(f"Scanning {len(TICKERS)} ETFs for signals..."):
-                found = False
-                for _ in range(SIGNAL_FREQUENCY):
-                    if generate_signal():
-                        found = True
-                if found:
-                    st.success("New signals generated!")
-                else:
-                    st.info("No signals met criteria this scan")
+            generate_signal()
             st.rerun()
     with col2:
         if st.button("🗑️ Clear Signals", use_container_width=True):
@@ -1052,12 +999,12 @@ if selected == "Trading Hub":
     st.subheader(f"📊 Trading Signals ({len(st.session_state.signal_queue)} Active)")
     
     if len(st.session_state.signal_queue) == 0:
-        st.info(f"""
+        st.info("""
         **No active signals.**
         
         Signals generate when:
-        - ✅ Market conditions align across any of {len(TICKERS)} ETFs
-        - ✅ Conviction threshold met (≥{MIN_CONVICTION:.0%})
+        - ✅ Market conditions align
+        - ✅ Conviction threshold met
         - ✅ Macro filter passed (if enabled)
         
         Try: Generate Signals button or lower Min Conviction in sidebar
@@ -1069,139 +1016,147 @@ if selected == "Trading Hub":
         time_left = SIGNAL_EXPIRATION_MINUTES - signal_age
         
         st.markdown(f"""
-        <div style="background:#1a1a1a;padding:20px;border-radius:10px;border-left:5px solid #4CAF50;margin:10px 0;">
-            <h3 style="margin:0;color:white;">{sig['symbol']} - {sig['type']}</h3>
-            <p style="margin:5px 0;"><strong>Action:</strong> {sig['action']} | <strong>Conviction:</strong> {sig['conviction']}/10</p>
-            <p style="margin:5px 0;"><strong>Entry:</strong> ${sig['entry_price']:.2f}</p>
-            <p style="margin:5px 0;"><strong>Thesis:</strong> {sig['thesis']}</p>
-            <p style="margin:5px 0;font-size:12px;color:#888;">Time Left: {time_left:.1f} min | Generated: {sig['time']}</p>
+        <div style="background:#ff6b6b;padding:15px;border-radius:10px;margin-bottom:10px;">
+            <h3>🎯 SIGNAL - {sig['type']}</h3>
+            <p style="font-size:14px;"><b>Generated:</b> {sig['time']} | <b>Time Left:</b> {time_left:.0f} min | <b>Conviction:</b> {sig['conviction']}/10</p>
+            <p style="font-size:16px;"><b>{sig['symbol']}</b> | {sig['action']}</p>
+            <p style="font-size:12px;"><b>Strategy:</b> {sig['strategy']}</p>
+            <p style="font-size:12px;"><b>Thesis:</b> {sig['thesis']}</p>
         </div>
         """, unsafe_allow_html=True)
         
-        col_a, col_b = st.columns([1, 3])
-        with col_a:
-            if st.button("✅ Execute Trade", key=f"exec_{sig['id']}", use_container_width=True):
-                # Log opening trade
-                log_trade(
-                    ts=datetime.now(ZoneInfo("US/Eastern")).strftime("%m/%d %H:%M"),
-                    typ='Open',
-                    sym=sig['symbol'],
-                    action=sig['action'].split()[0],  # Extract BUY/SELL
-                    size=sig['size'],
-                    entry=f"${sig['entry_price']:.2f}",
-                    exit=None,
-                    pnl=None,
-                    status='OPEN',
-                    sig_id=sig['id'],
-                    entry_numeric=sig['entry_price'],
-                    strategy=sig['strategy'],
-                    thesis=sig['thesis'],
-                    max_hold=sig.get('max_hold', 240),
-                    conviction=sig['conviction'],
-                    signal_type=sig['type']
-                )
-                
-                # Add to active trades
-                st.session_state.active_trades.append({
-                    'symbol': sig['symbol'],
-                    'entry_price': sig['entry_price'],
-                    'size': sig['size'],
-                    'entry_time': datetime.now(ZoneInfo("US/Eastern")),
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"✅ Take: {sig['id']}", key=f"take_{sig['id']}", use_container_width=True):
+                entry_price = market_data[sig['symbol']]['price']
+                trade = {
                     'signal_id': sig['id'],
+                    'entry_time': datetime.now(ZoneInfo("US/Eastern")),
+                    'symbol': sig['symbol'],
+                    'action': sig['action'],
+                    'size': sig['size'],
+                    'entry_price': entry_price,
+                    'max_hold': sig.get('max_hold'),
+                    'dte': sig.get('dte'),
                     'strategy': sig['strategy'],
                     'thesis': sig['thesis'],
-                    'max_hold': sig.get('max_hold', 240),
                     'conviction': sig['conviction'],
-                    'signal_type': sig['type'],
-                    'action': sig['action']
-                })
+                    'signal_type': sig['signal_type'],
+                    'max_pnl_reached': 0
+                }
+                st.session_state.active_trades.append(trade)
                 
-                # Remove from signal queue
-                st.session_state.signal_queue.remove(sig)
-                save_all_data()
-                st.success(f"Trade executed: {sig['action']}")
-                st.rerun()
-        
-        with col_b:
-            if st.button("❌ Dismiss Signal", key=f"dismiss_{sig['id']}", use_container_width=True):
-                st.session_state.signal_queue.remove(sig)
-                save_all_data()
-                st.rerun()
-    
-    # Active Trades
-    st.divider()
-    st.subheader(f"🎯 Active Trades ({len(st.session_state.active_trades)})")
-    
-    if len(st.session_state.active_trades) == 0:
-        st.info("No active trades. Execute signals above to open positions.")
-    
-    for trade in st.session_state.active_trades:
-        # Get current price for P&L calculation
-        try:
-            ticker = yf.Ticker(trade['symbol'])
-            current_price = ticker.history(period="1d")['Close'].iloc[-1]
-            entry_price = trade.get('entry_price', trade.get('entry', 0))
-            pnl = (current_price - entry_price) * trade['size']
-            pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price != 0 else 0
-            
-            # Calculate time held
-            minutes_held = (datetime.now(ZoneInfo("US/Eastern")) - trade['entry_time']).total_seconds() / 60
-            
-            pnl_color = 'green' if pnl >= 0 else 'red'
-            
-            st.markdown(f"""
-            <div style="background:#1a1a1a;padding:20px;border-radius:10px;border-left:5px solid {'#4CAF50' if pnl >= 0 else '#f44336'};margin:10px 0;">
-                <h3 style="margin:0;color:white;">{trade['symbol']} - {trade['size']} shares</h3>
-                <p style="margin:5px 0;"><strong>Entry:</strong> ${entry_price:.2f} | <strong>Current:</strong> ${current_price:.2f}</p>
-                <p style="margin:5px 0;"><strong>P&L:</strong> <span style="color:{pnl_color};font-weight:bold;">${pnl:+.2f} ({pnl_pct:+.2f}%)</span></p>
-                <p style="margin:5px 0;"><strong>Thesis:</strong> {trade.get('thesis', 'N/A')}</p>
-                <p style="margin:5px 0;font-size:12px;color:#888;">Held: {minutes_held:.1f} min | Max Hold: {trade.get('max_hold', 240)} min</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if st.button("🔴 Close Position", key=f"close_{trade['signal_id']}", use_container_width=True):
-                # Calculate final P&L
-                exit_price = current_price
-                final_pnl = (exit_price - entry_price) * trade['size']
-                
-                # Log closing trade
                 log_trade(
-                    ts=datetime.now(ZoneInfo("US/Eastern")).strftime("%m/%d %H:%M"),
-                    typ='Close',
-                    sym=trade['symbol'],
-                    action='SELL',
-                    size=trade['size'],
-                    entry=f"${entry_price:.2f}",
-                    exit=f"${exit_price:.2f}",
-                    pnl=f"${final_pnl:+.2f}",
-                    status='CLOSED',
-                    sig_id=trade.get('signal_id'),
-                    entry_numeric=entry_price,
-                    exit_numeric=exit_price,
-                    pnl_numeric=final_pnl,
-                    dte=trade.get('dte'),
-                    strategy=trade.get('strategy'),
-                    thesis=trade.get('thesis'),
-                    max_hold=trade.get('max_hold'),
-                    actual_hold=minutes_held,
-                    conviction=trade.get('conviction'),
-                    signal_type=trade.get('signal_type')
+                    sig['time'], "Open", sig['symbol'], sig['action'], sig['size'],
+                    f"${entry_price:.2f}", "Pending", "Open", "Open", sig['id'],
+                    entry_numeric=entry_price, dte=sig.get('dte'),
+                    strategy=sig['strategy'], thesis=sig['thesis'], max_hold=sig.get('max_hold'),
+                    conviction=sig['conviction'], signal_type=sig['signal_type']
                 )
-                st.session_state.active_trades.remove(trade)
+                
+                # Update history
+                for hist_sig in st.session_state.signal_history:
+                    if hist_sig['id'] == sig['id']:
+                        hist_sig['status'] = 'Taken'
+                        break
+                
+                st.session_state.signal_queue.remove(sig)
                 save_all_data()
-                st.success("Trade closed!")
+                st.success("✅ Trade opened!")
                 st.rerun()
         
-        except Exception as e:
-            st.error(f"Error fetching data for {trade['symbol']}: {str(e)}")
+        with col2:
+            if st.button(f"❌ Skip: {sig['id']}", key=f"skip_{sig['id']}", use_container_width=True):
+                log_trade(
+                    sig['time'], "Skipped", sig['symbol'], sig['action'], sig['size'],
+                    "---", "---", "---", "Skipped", sig['id'],
+                    strategy=sig['strategy'], thesis=sig['thesis'],
+                    conviction=sig['conviction'], signal_type=sig['signal_type']
+                )
+                
+                # Update history
+                for hist_sig in st.session_state.signal_history:
+                    if hist_sig['id'] == sig['id']:
+                        hist_sig['status'] = 'Skipped'
+                        break
+                
+                st.session_state.signal_queue.remove(sig)
+                save_all_data()
+                st.info("Signal skipped")
+                st.rerun()
+    
+    # Display Active Trades
+    if st.session_state.active_trades:
+        st.subheader(f"📈 Active Trades ({len(st.session_state.active_trades)})")
+        for trade in st.session_state.active_trades:
+            current_price = market_data[trade['symbol']]['price']
+            entry_price = trade['entry_price']
+            
+            if 'SELL SHORT' in trade['action'] or 'Short' in trade.get('strategy', ''):
+                pnl = (entry_price - current_price) * trade['size']
+                pnl_pct = ((entry_price - current_price) / entry_price) * 100
+            else:
+                pnl = (current_price - entry_price) * trade['size']
+                pnl_pct = ((current_price - entry_price) / entry_price) * 100
+            
+            minutes_held = (datetime.now(ZoneInfo("US/Eastern")) - trade['entry_time']).total_seconds() / 60
+            pnl_color = "green" if pnl >= 0 else "red"
+            
+            with st.expander(f"{trade['symbol']} - {trade['signal_id']} | P&L: ${pnl:.0f} ({pnl_pct:+.2f}%)"):
+                col1, col2, col3 = st.columns(3)
+                col1.write(f"**Entry:** ${entry_price:.2f}")
+                col1.write(f"**Current:** ${current_price:.2f}")
+                col1.write(f"**Size:** {trade['size']} shares")
+                col2.write(f"**Strategy:** {trade['strategy']}")
+                col2.write(f"**Conviction:** {trade.get('conviction', 'N/A')}/10")
+                col2.write(f"**Signal Type:** {trade.get('signal_type', 'N/A')}")
+                col3.write(f"**Time Held:** {minutes_held:.0f} min")
+                col3.markdown(f"**P&L:** <span style='color:{pnl_color};font-size:20px;'>${pnl:.0f} ({pnl_pct:+.2f}%)</span>", unsafe_allow_html=True)
+                
+                st.write(f"**Thesis:** {trade['thesis']}")
+                
+                if st.button(f"Close Trade: {trade['signal_id']}", key=f"close_{trade['signal_id']}"):
+                    exit_price = current_price
+                    
+                    if 'SELL SHORT' in trade['action'] or 'Short' in trade.get('strategy', ''):
+                        close_action = 'Buy to Cover'
+                    else:
+                        close_action = 'Sell'
+                    
+                    log_trade(
+                        datetime.now(ZoneInfo("US/Eastern")).strftime("%m/%d %H:%M"),
+                        "Close",
+                        trade['symbol'],
+                        close_action,
+                        trade['size'],
+                        f"${entry_price:.2f}",
+                        f"${exit_price:.2f}",
+                        f"${pnl:.0f}",
+                        "Closed (Manual)",
+                        trade['signal_id'],
+                        entry_numeric=entry_price,
+                        exit_numeric=exit_price,
+                        pnl_numeric=pnl,
+                        dte=trade.get('dte'),
+                        strategy=trade.get('strategy'),
+                        thesis=trade.get('thesis'),
+                        max_hold=trade.get('max_hold'),
+                        actual_hold=minutes_held,
+                        conviction=trade.get('conviction'),
+                        signal_type=trade.get('signal_type')
+                    )
+                    st.session_state.active_trades.remove(trade)
+                    save_all_data()
+                    st.success("Trade closed!")
+                    st.rerun()
 
 # ========================================
-# MARKET DASHBOARD - WITH CLICK NAVIGATION
+# MARKET DASHBOARD
 # ========================================
 
 elif selected == "Market Dashboard":
     st.header("📊 Market Dashboard")
-    st.caption("📍 Click any ETF button below a table to view its chart")
+    st.caption("Comprehensive market overview across asset classes, sectors, countries, and factors")
     
     # Control panel
     col1, col2 = st.columns([3, 1])
@@ -1212,7 +1167,7 @@ elif selected == "Market Dashboard":
             st.cache_data.clear()
             st.rerun()
     
-    # Custom period selection
+    # Custom period selection (only shown if selected)
     if view_mode == "Custom Period":
         col1, col2 = st.columns(2)
         with col1:
@@ -1220,63 +1175,359 @@ elif selected == "Market Dashboard":
         with col2:
             custom_end = st.date_input("End Date", value=datetime.now())
     
-    # Helper functions for table display with clickable navigation
+    # Market data configuration - EXPANDED
+    MARKET_ETFS = {
+        "Equities": {
+            "Large Cap": "IVV",
+            "Mid Cap": "IJH",
+            "Small Cap": "IJR",
+            "SMID": "SMMD",
+            "All Cap": "ITOT",
+            "Developed Markets": "EFA",
+            "Emerging Markets": "EEM",
+            "World ex-US": "ACWX",
+            "World": "ACWI"
+        },
+        "Fixed Income": {
+            "Aggregate": "AGG",
+            "Short-Term Treasury": "SHV",
+            "Intermediate Treasury": "IEF",
+            "Long-Term Treasury": "TLT",
+            "TIPS": "TIP",
+            "Investment Grade Corp": "LQD",
+            "High Yield Corporate": "HYG",
+            "Emerging Market Bonds": "EMB",
+            "Municipals": "MUB",
+            "Mortgage-Backed": "MBB",
+            "Floating Rate": "FLOT"
+        },
+        "Real Assets": {
+            "Bitcoin": "IBIT",
+            "Gold": "IAU",
+            "Silver": "SLV",
+            "Commodity Basket": "GSG",
+            "Natural Resources": "IGE",
+            "Oil": "DBO",
+            "Real Estate": "IYR",
+            "Infrastructure": "IGF",
+            "Timber": "WOOD"
+        },
+        "S&P Sectors": {
+            "Communication Services": "XLC",
+            "Consumer Discretionary": "XLY",
+            "Consumer Staples": "XLP",
+            "Energy": "XLE",
+            "Financials": "XLF",
+            "Health Care": "XLV",
+            "Industrials": "XLI",
+            "Materials": "XLB",
+            "Real Estate": "XLRE",
+            "Technology": "XLK",
+            "Utilities": "XLU"
+        },
+        "Developed Markets": {
+            "United States": "SPY",
+            "Canada": "EWC",
+            "United Kingdom": "EWU",
+            "Germany": "EWG",
+            "France": "EWQ",
+            "Italy": "EWI",
+            "Spain": "EWP",
+            "Netherlands": "EWN",
+            "Switzerland": "EWL",
+            "Belgium": "EWK",
+            "Sweden": "EWD",
+            "Japan": "EWJ",
+            "Australia": "EWA",
+            "Hong Kong": "EWH",
+            "Singapore": "EWS",
+            "South Korea": "EWY"
+        },
+        "Emerging Markets": {
+            "China": "MCHI",
+            "India": "INDA",
+            "Brazil": "EWZ",
+            "Mexico": "EWW",
+            "South Africa": "EZA",
+            "Taiwan": "EWT",
+            "Russia": "ERUS",
+            "Turkey": "TUR",
+            "Indonesia": "EIDO",
+            "Thailand": "THD",
+            "Malaysia": "EWM",
+            "Philippines": "EPHE",
+            "Chile": "ECH",
+            "Colombia": "GXG",
+            "Peru": "EPU",
+            "Poland": "EPOL"
+        },
+        "Factors": {
+            "Value": "VLUE",
+            "Momentum": "MTUM",
+            "Quality": "QUAL",
+            "Size (Small Cap)": "SIZE",
+            "Low Volatility": "USMV",
+            "Dividend": "DVY",
+            "Growth": "IVW",
+            "High Dividend": "HDV"
+        }
+    }
+    
+    # Define standard periods
+    STANDARD_PERIODS = {
+        "Today": 1,
+        "MTD": "mtd",
+        "YTD": "ytd",
+        "1yr": 252,
+        "3yr": 756,
+        "5yr": 1260,
+        "10yr": 2520
+    }
+    
+    @st.cache_data(ttl=300)
+    def fetch_multi_period_performance(tickers_dict):
+        """Fetch performance data for all periods at once"""
+        results = {}
+        
+        # Get the most recent trading day
+        def get_last_trading_day():
+            """Get the last valid trading day accounting for market hours, weekends, and holidays"""
+            now = datetime.now(ZoneInfo("US/Eastern"))
+            check_date = now
+            
+            # If before 4pm today, use yesterday. If after 4pm, can use today if it's a trading day
+            if now.hour < 16:
+                check_date = now - timedelta(days=1)
+            
+            # Now go back to find last valid trading day
+            for _ in range(10):  # Check up to 10 days back
+                # Skip weekends
+                if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
+                    check_date = check_date - timedelta(days=1)
+                    continue
+                
+                # Check if it's a US market holiday
+                us_holidays = [
+                    datetime(2024, 1, 1),   # New Year's Day
+                    datetime(2024, 1, 15),  # MLK Day
+                    datetime(2024, 2, 19),  # Presidents Day
+                    datetime(2024, 3, 29),  # Good Friday
+                    datetime(2024, 5, 27),  # Memorial Day
+                    datetime(2024, 6, 19),  # Juneteenth
+                    datetime(2024, 7, 4),   # Independence Day
+                    datetime(2024, 9, 2),   # Labor Day
+                    datetime(2024, 11, 28), # Thanksgiving
+                    datetime(2024, 12, 25), # Christmas
+                    datetime(2025, 1, 1),   # New Year's Day
+                    datetime(2025, 1, 20),  # MLK Day
+                    datetime(2025, 2, 17),  # Presidents Day
+                    datetime(2025, 4, 18),  # Good Friday
+                    datetime(2025, 5, 26),  # Memorial Day
+                    datetime(2025, 6, 19),  # Juneteenth
+                    datetime(2025, 7, 4),   # Independence Day
+                    datetime(2025, 9, 1),   # Labor Day
+                    datetime(2025, 11, 27), # Thanksgiving
+                    datetime(2025, 12, 25)  # Christmas
+                ]
+                
+                if check_date.date() in [h.date() for h in us_holidays]:
+                    check_date = check_date - timedelta(days=1)
+                    continue
+                
+                # Found a valid trading day
+                return check_date
+            
+            return now
+        
+        last_trading_day = get_last_trading_day()
+        
+        for category, tickers in tickers_dict.items():
+            category_data = []
+            
+            for name, ticker in tickers.items():
+                try:
+                    # Fetch enough data for longest period
+                    t = yf.Ticker(ticker)
+                    # Get more history to ensure we have enough data
+                    hist = t.history(period="max")
+                    
+                    if hist.empty:
+                        continue
+                    
+                    # Filter to only data up to last trading day
+                    hist = hist[hist.index.date <= last_trading_day.date()]
+                    
+                    if len(hist) < 2:
+                        continue
+                    
+                    row_data = {'Name': name, 'ETF': ticker}
+                    
+                    # Calculate returns for each period
+                    for period_name, period_value in STANDARD_PERIODS.items():
+                        try:
+                            if period_value == "mtd":
+                                # Month to date - first day of month containing last_trading_day
+                                period_start = last_trading_day.replace(day=1)
+                                period_hist = hist[hist.index >= period_start]
+                            elif period_value == "ytd":
+                                # Year to date - first day of year containing last_trading_day
+                                period_start = last_trading_day.replace(month=1, day=1)
+                                period_hist = hist[hist.index >= period_start]
+                            elif period_value == 1:
+                                # "Today" - last 2 trading days for day-over-day change
+                                period_hist = hist.tail(2)
+                            else:
+                                # Use number of trading days
+                                # Add some buffer to ensure we get enough data
+                                period_hist = hist.tail(int(period_value * 1.2))
+                            
+                            if len(period_hist) >= 2:
+                                start_price = period_hist['Close'].iloc[0]
+                                end_price = period_hist['Close'].iloc[-1]
+                                return_pct = ((end_price - start_price) / start_price) * 100
+                                row_data[period_name] = return_pct
+                            else:
+                                row_data[period_name] = None
+                        except Exception as e:
+                            row_data[period_name] = None
+                    
+                    category_data.append(row_data)
+                except Exception as e:
+                    continue
+            
+            if category_data:
+                results[category] = pd.DataFrame(category_data)
+        
+        return results
+    
+    @st.cache_data(ttl=300)
+    def fetch_custom_period_performance(tickers_dict, start, end):
+        """Fetch performance for custom date range"""
+        results = {}
+        
+        for category, tickers in tickers_dict.items():
+            category_data = []
+            
+            for name, ticker in tickers.items():
+                try:
+                    t = yf.Ticker(ticker)
+                    hist = t.history(start=start, end=end)
+                    
+                    if not hist.empty and len(hist) >= 2:
+                        start_price = hist['Close'].iloc[0]
+                        end_price = hist['Close'].iloc[-1]
+                        return_pct = ((end_price - start_price) / start_price) * 100
+                        
+                        category_data.append({
+                            'Name': name,
+                            'ETF': ticker,
+                            'Return': return_pct
+                        })
+                except:
+                    continue
+            
+            if category_data:
+                results[category] = pd.DataFrame(category_data)
+        
+        return results
+    
+    def get_color_from_return(return_val):
+        """Get graduated color based on return value with readable text colors"""
+        if pd.isna(return_val):
+            return '#404040', '#FFFFFF'
+        
+        # More granular color grading with READABLE text colors
+        if return_val >= 50:
+            return '#003300', '#FFFFFF'  # Very dark green, white text
+        elif return_val >= 30:
+            return '#004d00', '#FFFFFF'  # Dark green, white text
+        elif return_val >= 20:
+            return '#006600', '#FFFFFF'  # Medium-dark green, white text
+        elif return_val >= 15:
+            return '#008000', '#FFFFFF'  # Medium green, white text
+        elif return_val >= 10:
+            return '#009900', '#FFFFFF'  # Medium-light green, white text
+        elif return_val >= 5:
+            return '#00b300', '#FFFFFF'  # Light-medium green, white text
+        elif return_val >= 2:
+            return '#33cc33', '#000000'  # Lighter green, black text
+        elif return_val >= 0:
+            return '#99ff99', '#000000'  # Very light green, black text
+        elif return_val >= -2:
+            return '#ffcccc', '#000000'  # Very light red, black text
+        elif return_val >= -5:
+            return '#ff9999', '#000000'  # Light red, black text
+        elif return_val >= -10:
+            return '#ff4d4d', '#000000'  # Medium-light red, black text
+        elif return_val >= -15:
+            return '#ff0000', '#FFFFFF'  # Medium red, white text
+        elif return_val >= -20:
+            return '#cc0000', '#FFFFFF'  # Medium-dark red, white text
+        elif return_val >= -30:
+            return '#990000', '#FFFFFF'  # Dark red, white text
+        else:
+            return '#660000', '#FFFFFF'  # Very dark red, white text
+    
+    def annualize_return(total_return, years):
+        """Convert total return to annualized return"""
+        if years <= 0:
+            return total_return
+        return ((1 + total_return / 100) ** (1 / years) - 1) * 100
+    
     def create_multi_period_table(df, title):
-        """Create HTML table for multi-period data with navigation buttons"""
-        st.subheader(title)
+        """Create table showing all periods"""
+        st.markdown(f"### {title}")
         
-        periods = ['1D', '5D', '1M', 'YTD', '1Y', '3Y']
+        # Create HTML table
+        periods = ["Today", "MTD", "YTD", "1yr", "3yr", "5yr", "10yr"]
+        period_years = {"Today": 0, "MTD": 0, "YTD": 0, "1yr": 1, "3yr": 3, "5yr": 5, "10yr": 10}
         
-        html = '<table style="width:100%; border-collapse:collapse; font-family:Arial; margin-bottom:20px;">'
+        html = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
         
-        # Header
+        # Header row
         html += '<tr style="background:#1a1a1a; border-bottom: 2px solid #404040;">'
         html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">Name</th>'
         html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">ETF</th>'
         for period in periods:
-            html += f'<th style="padding:12px; text-align:right; color:#FFFFFF; border-right:1px solid #404040;">{period}</th>'
+            html += f'<th style="padding:12px; text-align:right; color:#FFFFFF; {"border-right:1px solid #404040;" if period != periods[-1] else ""}">{period}</th>'
         html += '</tr>'
         
         # Data rows
         for idx, row in df.iterrows():
-            etf_ticker = row['ETF']
-            html += f'<tr style="border-bottom:1px solid #404040;">'
+            html += '<tr style="border-bottom:1px solid #404040;">'
             html += f'<td style="padding:10px; background:#2a2a2a; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
-            html += f'<td style="padding:10px; background:#2a2a2a; color:#DDDDDD; border-right:1px solid #404040;"><strong>{etf_ticker}</strong></td>'
+            html += f'<td style="padding:10px; background:#2a2a2a; color:#DDDDDD; border-right:1px solid #404040;">{row["ETF"]}</td>'
             
             for period in periods:
-                if period in row and pd.notna(row[period]):
-                    return_val = row[period]
-                    bg_color, text_color = get_color_from_return(return_val)
-                    html += f'<td style="padding:10px; background:{bg_color}; color:{text_color}; text-align:right; font-weight:bold; border-right:1px solid #404040;">{return_val:+.1f}%</td>'
+                return_val = row.get(period)
+                
+                # Annualize returns for periods > 1 year
+                years = period_years[period]
+                if years > 1 and not pd.isna(return_val):
+                    display_return = annualize_return(return_val, years)
                 else:
-                    html += '<td style="padding:10px; background:#2a2a2a; color:#888888; text-align:right; border-right:1px solid #404040;">-</td>'
+                    display_return = return_val
+                
+                bg_color, text_color = get_color_from_return(display_return)
+                
+                if pd.isna(return_val):
+                    display_val = "N/A"
+                else:
+                    display_val = f"{display_return:+.1f}%"
+                
+                html += f'<td style="padding:10px; background:{bg_color}; color:{text_color}; text-align:right; font-weight:bold; {"border-right:1px solid #404040;" if period != periods[-1] else ""}">{display_val}</td>'
             
             html += '</tr>'
         
         html += '</table>'
         st.markdown(html, unsafe_allow_html=True)
-        
-        # NEW: Navigation buttons for click-to-chart
-        st.caption("👇 Click to view chart")
-        etf_list = df['ETF'].tolist()
-        num_cols = 6
-        cols = st.columns(num_cols)
-        for idx, etf in enumerate(etf_list):
-            col_idx = idx % num_cols
-            with cols[col_idx]:
-                if st.button(f"📊 {etf}", key=f"nav_{etf}_{title}", use_container_width=True):
-                    st.session_state.chart_ticker = etf
-                    st.session_state.nav_to_chart = True
-                    st.rerun()
-        
         st.write("")
     
     def create_custom_period_table(df, title):
-        """Create HTML table for custom period data with navigation buttons"""
-        st.subheader(title)
+        """Create table for custom period"""
+        st.markdown(f"### {title}")
         
-        html = '<table style="width:100%; border-collapse:collapse; font-family:Arial; margin-bottom:20px;">'
+        html = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
         
         # Header
         html += '<tr style="background:#1a1a1a; border-bottom: 2px solid #404040;">'
@@ -1287,32 +1538,17 @@ elif selected == "Market Dashboard":
         
         # Data rows
         for idx, row in df.iterrows():
-            etf_ticker = row['ETF']
             return_val = row['Return']
             bg_color, text_color = get_color_from_return(return_val)
             
-            html += f'<tr style="border-bottom:1px solid #404040;">'
+            html += '<tr style="border-bottom:1px solid #404040;">'
             html += f'<td style="padding:10px; background:#2a2a2a; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
-            html += f'<td style="padding:10px; background:#2a2a2a; color:#DDDDDD; border-right:1px solid #404040;"><strong>{etf_ticker}</strong></td>'
+            html += f'<td style="padding:10px; background:#2a2a2a; color:#DDDDDD; border-right:1px solid #404040;">{row["ETF"]}</td>'
             html += f'<td style="padding:10px; background:{bg_color}; color:{text_color}; text-align:right; font-weight:bold;">{return_val:+.1f}%</td>'
             html += '</tr>'
         
         html += '</table>'
         st.markdown(html, unsafe_allow_html=True)
-        
-        # NEW: Navigation buttons
-        st.caption("👇 Click to view chart")
-        etf_list = df['ETF'].tolist()
-        num_cols = 6
-        cols = st.columns(num_cols)
-        for idx, etf in enumerate(etf_list):
-            col_idx = idx % num_cols
-            with cols[col_idx]:
-                if st.button(f"📊 {etf}", key=f"nav_{etf}_{title}_custom", use_container_width=True):
-                    st.session_state.chart_ticker = etf
-                    st.session_state.nav_to_chart = True
-                    st.rerun()
-        
         st.write("")
     
     # Fetch data based on view mode
@@ -1328,37 +1564,53 @@ elif selected == "Market Dashboard":
     
     # Display data
     if market_performance:
-        # Display each category
+        # Display each category vertically
         if view_mode == "Standard Periods":
-            for category_name in ["Equities", "Fixed Income", "Real Assets", "S&P Sectors", "Developed Markets", "Emerging Markets", "Factors"]:
-                if category_name in market_performance:
-                    icons = {
-                        "Equities": "📈",
-                        "Fixed Income": "📊",
-                        "Real Assets": "💰",
-                        "S&P Sectors": "🏭",
-                        "Developed Markets": "🌍",
-                        "Emerging Markets": "🌏",
-                        "Factors": "🎯"
-                    }
-                    create_multi_period_table(market_performance[category_name], f"{icons.get(category_name, '')} {category_name}")
+            if "Equities" in market_performance:
+                create_multi_period_table(market_performance["Equities"], "📈 Equities")
+            
+            if "Fixed Income" in market_performance:
+                create_multi_period_table(market_performance["Fixed Income"], "📊 Fixed Income")
+            
+            if "Real Assets" in market_performance:
+                create_multi_period_table(market_performance["Real Assets"], "💰 Real Assets")
+            
+            if "S&P Sectors" in market_performance:
+                create_multi_period_table(market_performance["S&P Sectors"], "🏭 S&P Sectors")
+            
+            if "Developed Markets" in market_performance:
+                create_multi_period_table(market_performance["Developed Markets"], "🌍 Developed Markets")
+            
+            if "Emerging Markets" in market_performance:
+                create_multi_period_table(market_performance["Emerging Markets"], "🌏 Emerging Markets")
+            
+            if "Factors" in market_performance:
+                create_multi_period_table(market_performance["Factors"], "🎯 Factors")
         
         else:  # Custom period
             period_label = f"{custom_start.strftime('%m/%d/%Y')} - {custom_end.strftime('%m/%d/%Y')}"
             st.subheader(f"Custom Period: {period_label}")
             
-            for category_name in ["Equities", "Fixed Income", "Real Assets", "S&P Sectors", "Developed Markets", "Emerging Markets", "Factors"]:
-                if category_name in market_performance:
-                    icons = {
-                        "Equities": "📈",
-                        "Fixed Income": "📊",
-                        "Real Assets": "💰",
-                        "S&P Sectors": "🏭",
-                        "Developed Markets": "🌍",
-                        "Emerging Markets": "🌏",
-                        "Factors": "🎯"
-                    }
-                    create_custom_period_table(market_performance[category_name], f"{icons.get(category_name, '')} {category_name}")
+            if "Equities" in market_performance:
+                create_custom_period_table(market_performance["Equities"], "📈 Equities")
+            
+            if "Fixed Income" in market_performance:
+                create_custom_period_table(market_performance["Fixed Income"], "📊 Fixed Income")
+            
+            if "Real Assets" in market_performance:
+                create_custom_period_table(market_performance["Real Assets"], "💰 Real Assets")
+            
+            if "S&P Sectors" in market_performance:
+                create_custom_period_table(market_performance["S&P Sectors"], "🏭 S&P Sectors")
+            
+            if "Developed Markets" in market_performance:
+                create_custom_period_table(market_performance["Developed Markets"], "🌍 Developed Markets")
+            
+            if "Emerging Markets" in market_performance:
+                create_custom_period_table(market_performance["Emerging Markets"], "🌏 Emerging Markets")
+            
+            if "Factors" in market_performance:
+                create_custom_period_table(market_performance["Factors"], "🎯 Factors")
         
         # Export functionality
         st.divider()
@@ -1380,10 +1632,10 @@ elif selected == "Market Dashboard":
                     "text/csv"
                 )
     else:
-        st.warning("No data available for the selected period.")
+        st.warning("No market data available")
 
 # ========================================
-# SIGNAL HISTORY
+# SIGNAL HISTORY PAGE
 # ========================================
 
 elif selected == "Signal History":
@@ -1398,9 +1650,7 @@ elif selected == "Signal History":
             status_filter = st.multiselect("Status", ["Active", "Taken", "Skipped", "Expired"], 
                                           default=["Active", "Taken", "Skipped", "Expired"])
         with col2:
-            # Show all tickers in filter
-            ticker_filter = st.multiselect("Ticker", sorted(list(set([s['symbol'] for s in st.session_state.signal_history]))), 
-                                          default=sorted(list(set([s['symbol'] for s in st.session_state.signal_history]))))
+            ticker_filter = st.multiselect("Ticker", TICKERS, default=TICKERS)
         with col3:
             days_back = st.slider("Days Back", 1, 30, 7)
         
@@ -1408,7 +1658,7 @@ elif selected == "Signal History":
         cutoff_time = datetime.now(ZoneInfo("US/Eastern")) - timedelta(days=days_back)
         filtered_signals = [
             sig for sig in st.session_state.signal_history
-            if sig.get('status', 'Unknown') in status_filter
+            if sig.get('status') in status_filter
             and sig['symbol'] in ticker_filter
             and sig['timestamp'] >= cutoff_time
         ]
@@ -1419,7 +1669,8 @@ elif selected == "Signal History":
             history_df = pd.DataFrame([{
                 'Time': sig['time'],
                 'Symbol': sig['symbol'],
-                'Type': sig['type'],
+                'Type': sig['signal_type'],
+                'Action': sig['action'],
                 'Conviction': sig['conviction'],
                 'Status': sig.get('status', 'Unknown'),
                 'Age (min)': int((datetime.now(ZoneInfo("US/Eastern")) - sig['timestamp']).total_seconds() / 60)
@@ -1436,17 +1687,8 @@ elif selected == "Signal History":
                     "text/csv"
                 )
 
-# Continue with remaining sections - BACKTEST, TRADE LOG, PERFORMANCE, CHART ANALYSIS, OPTIONS CHAIN, MACRO DASHBOARD
-# These sections remain unchanged from the original code
-
-# Note: Due to length constraints, the remaining sections (Backtest through Macro Dashboard) 
-# are identical to the original file and should be copied from lines 1808-2636 of the original file.
-
-st.divider()
-st.caption("SPY Pro v3.0 COMPLETE & FIXED - Enhanced with all ETFs and click navigation | NameError resolved")
-
 # ========================================
-# BACKTEST PAGE
+# BACKTEST PAGE (RESTORED)
 # ========================================
 
 elif selected == "Backtest":
@@ -1464,8 +1706,8 @@ elif selected == "Backtest":
         if test_mode == "Single Ticker":
             tickers_to_test = [test_ticker]
         else:
-            tickers_to_test = TICKERS[:10]  # Limit to first 10 for performance
-            st.info(f"Running portfolio backtest across {len(tickers_to_test)} tickers")
+            tickers_to_test = TICKERS
+            st.info(f"Running portfolio backtest across {len(TICKERS)} tickers")
         
         @st.cache_data(ttl=3600)
         def run_enhanced_backtest(ticker):
@@ -1562,12 +1804,12 @@ elif selected == "Backtest":
                         # Oversold Bounce
                         if ('RSI' in hist.columns and 'Stoch_%K' in hist.columns):
                             if (hist['RSI'].iloc[i] < 35 and
-                                hist['Stoch_%K'].iloc[i] < 30 and
-                                hist['RSI'].iloc[i] > hist['RSI'].iloc[i-1]):
+                                hist['Stoch_%K'].iloc[i] < 25 and
+                                hist['Close'].pct_change().iloc[i] > 0.001):
                                 in_position = True
                                 entry_price = current_price
                                 entry_time = current_time
-                                conviction = 7
+                                conviction = 6
                                 shares = 12
                                 signal_type = "Oversold Bounce"
                                 entry_reason = f"RSI {hist['RSI'].iloc[i]:.0f} oversold"
@@ -1798,86 +2040,29 @@ elif selected == "Performance":
             signal_perf.columns = ['Total P&L', 'Count', 'Avg P&L']
             st.dataframe(signal_perf, use_container_width=True)
 
+# ========================================
 # CHART ANALYSIS
 # ========================================
 
 elif selected == "Chart Analysis":
-    st.header("📈 Chart Analysis & Technical Assessment")
+    st.header("📈 Chart Analysis")
     
-    # Check if navigated from Market Dashboard
-    if 'nav_to_chart' in st.session_state and st.session_state['nav_to_chart']:
-        default_ticker = st.session_state.get('chart_ticker', 'SPY')
-        st.session_state['nav_to_chart'] = False
-    else:
-        default_ticker = 'SPY'
-    
-    # Build ticker list from all Market Dashboard categories
-    all_etfs = ['SPY']  # Start with SPY
-    for category_etfs in MARKET_ETFS.values():
-        all_etfs.extend(list(category_etfs.values()))
-    all_etfs = sorted(list(set(all_etfs)))  # Remove duplicates and sort
-    
-    # Find index of default ticker
-    try:
-        default_index = all_etfs.index(default_ticker)
-    except:
-        default_index = 0
-    
-    col1, col2, col3 = st.columns([2, 2, 1])
-    with col1:
-        ticker_choice = st.selectbox("Select Ticker", all_etfs, index=default_index)
-    with col2:
-        period_type = st.radio("Period Type", ["Standard", "Custom"], horizontal=True)
-    
-    if period_type == "Standard":
-        with col3:
-            time_period = st.selectbox("Time Period", ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y", "Max"], index=5)
-    else:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            custom_start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=180))
-        with col_b:
-            custom_end_date = st.date_input("End Date", value=datetime.now())
+    ticker_choice = st.selectbox("Select Ticker", TICKERS)
     
     try:
         t = yf.Ticker(ticker_choice)
-        
-        # Fetch data based on period selection
-        if period_type == "Standard":
-            period_map = {
-                "1D": "1d", "5D": "5d", "1M": "1mo", "3M": "3mo",
-                "6M": "6mo", "YTD": "ytd", "1Y": "1y", "2Y": "2y",
-                "5Y": "5y", "Max": "max"
-            }
-            hist = t.history(period=period_map[time_period], interval="1d")
-        else:
-            hist = t.history(start=custom_start_date, end=custom_end_date, interval="1d")
+        hist = t.history(period="6mo", interval="1d")
         
         if not hist.empty:
             df = calculate_technical_indicators(hist)
             
-            # Current values
-            current_price = df['Close'].iloc[-1]
-            prev_close = df['Close'].iloc[-2] if len(df) >= 2 else current_price
-            price_change = current_price - prev_close
-            price_change_pct = (price_change / prev_close) * 100 if prev_close != 0 else 0
-            
-            # Display current price prominently
-            st.markdown(f"""
-            <div style="background:#1a1a1a; padding:20px; border-radius:10px; margin-bottom:20px;">
-                <h2 style="color:#FFFFFF; margin:0;">{ticker_choice}</h2>
-                <h1 style="color:{'#00ff00' if price_change >= 0 else '#ff0000'}; margin:10px 0;">${current_price:.2f}</h1>
-                <h3 style="color:{'#00ff00' if price_change >= 0 else '#ff0000'}; margin:0;">{price_change:+.2f} ({price_change_pct:+.2f}%)</h3>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Create candlestick chart
+            # Create chart
             fig = make_subplots(
                 rows=3, cols=1,
                 shared_xaxes=True,
-                vertical_spacing=0.03,
+                vertical_spacing=0.05,
                 row_heights=[0.6, 0.2, 0.2],
-                subplot_titles=(f'{ticker_choice} Price & Moving Averages', 'RSI (14)', 'Volume')
+                subplot_titles=(f'{ticker_choice} Price', 'RSI', 'Volume')
             )
             
             # Candlestick
@@ -1890,15 +2075,14 @@ elif selected == "Chart Analysis":
                 name='Price'
             ), row=1, col=1)
             
-            # Add SMAs
-            sma_colors = {20: '#FFA500', 50: '#0080FF', 200: '#FF00FF'}
-            for period, color in sma_colors.items():
+            # SMAs
+            for period, color in [(20, 'orange'), (50, 'blue'), (200, 'purple')]:
                 if f'SMA_{period}' in df.columns:
                     fig.add_trace(go.Scatter(
                         x=df.index,
                         y=df[f'SMA_{period}'],
                         name=f'SMA {period}',
-                        line=dict(color=color, width=2)
+                        line=dict(color=color, width=1)
                     ), row=1, col=1)
             
             # RSI
@@ -1907,296 +2091,39 @@ elif selected == "Chart Analysis":
                     x=df.index,
                     y=df['RSI'],
                     name='RSI',
-                    line=dict(color='purple', width=1.5)
+                    line=dict(color='purple', width=1)
                 ), row=2, col=1)
                 
-                fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1, opacity=0.5)
-                fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1, opacity=0.5)
-                fig.add_hline(y=50, line_dash="dot", line_color="gray", row=2, col=1, opacity=0.3)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
             
             # Volume
-            colors = ['red' if df['Close'].iloc[i] < df['Open'].iloc[i] else 'green' for i in range(len(df))]
             fig.add_trace(go.Bar(
                 x=df.index,
                 y=df['Volume'],
                 name='Volume',
-                marker_color=colors,
-                opacity=0.5
+                marker_color='lightblue'
             ), row=3, col=1)
             
-            fig.update_layout(
-                height=800,
-                showlegend=True,
-                xaxis_rangeslider_visible=False,
-                template='plotly_dark',
-                hovermode='x unified'
-            )
-            
-            fig.update_yaxes(title_text="Price ($)", row=1, col=1)
-            fig.update_yaxes(title_text="RSI", row=2, col=1)
-            fig.update_yaxes(title_text="Volume", row=3, col=1)
-            
+            fig.update_layout(height=800, showlegend=True, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
             
-            st.divider()
+            # Current stats
+            st.subheader("Current Stats")
+            col1, col2, col3, col4 = st.columns(4)
             
-            # Technical Analysis Statistics & Assessment
-            st.subheader("📊 Technical Analysis & Signals")
+            current_price = df['Close'].iloc[-1]
+            rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 0
+            volume_ratio = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns else 1.0
+            adx = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
             
-            # Get technical values
-            rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50
-            macd = df['MACD'].iloc[-1] if 'MACD' in df.columns and not pd.isna(df['MACD'].iloc[-1]) else 0
-            macd_signal = df['MACD_Signal'].iloc[-1] if 'MACD_Signal' in df.columns and not pd.isna(df['MACD_Signal'].iloc[-1]) else 0
-            adx = df['ADX'].iloc[-1] if 'ADX' in df.columns and not pd.isna(df['ADX'].iloc[-1]) else 20
-            volume_ratio = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns and not pd.isna(df['Volume_Ratio'].iloc[-1]) else 1.0
+            col1.metric("Price", f"${current_price:.2f}")
+            col2.metric("RSI", f"{rsi:.1f}")
+            col3.metric("Volume Ratio", f"{volume_ratio:.2f}x")
+            col4.metric("ADX", f"{adx:.1f}")
             
-            # SMA positions
-            sma_20 = df['SMA_20'].iloc[-1] if 'SMA_20' in df.columns else current_price
-            sma_50 = df['SMA_50'].iloc[-1] if 'SMA_50' in df.columns else current_price
-            sma_200 = df['SMA_200'].iloc[-1] if 'SMA_200' in df.columns else current_price
-            
-            # Bollinger Bands
-            bb_position = None
-            if 'BB_Upper' in df.columns and 'BB_Lower' in df.columns:
-                bb_upper = df['BB_Upper'].iloc[-1]
-                bb_lower = df['BB_Lower'].iloc[-1]
-                bb_range = bb_upper - bb_lower
-                bb_position = ((current_price - bb_lower) / bb_range) * 100 if bb_range > 0 else 50
-            
-            # Calculate signals
-            def get_signal_color(value, bullish_threshold, bearish_threshold, reverse=False):
-                """Return color and assessment based on thresholds"""
-                if not reverse:
-                    if value >= bullish_threshold:
-                        return "#00ff00", "BULLISH"
-                    elif value <= bearish_threshold:
-                        return "#ff0000", "BEARISH"
-                    else:
-                        return "#ffff00", "NEUTRAL"
-                else:
-                    if value <= bullish_threshold:
-                        return "#00ff00", "BULLISH"
-                    elif value >= bearish_threshold:
-                        return "#ff0000", "BEARISH"
-                    else:
-                        return "#ffff00", "NEUTRAL"
-            
-            # RSI Assessment
-            rsi_color, rsi_signal = get_signal_color(rsi, 70, 30, reverse=True)
-            
-            # MACD Assessment
-            macd_bullish = macd > macd_signal
-            macd_color = "#00ff00" if macd_bullish else "#ff0000"
-            macd_signal_text = "BULLISH" if macd_bullish else "BEARISH"
-            
-            # Trend Assessment (SMA alignment)
-            price_above_sma20 = current_price > sma_20
-            price_above_sma50 = current_price > sma_50
-            price_above_sma200 = current_price > sma_200
-            
-            trend_score = sum([price_above_sma20, price_above_sma50, price_above_sma200])
-            if trend_score == 3:
-                trend_color, trend_signal = "#00ff00", "STRONG UPTREND"
-            elif trend_score == 2:
-                trend_color, trend_signal = "#7FFF00", "UPTREND"
-            elif trend_score == 1:
-                trend_color, trend_signal = "#ffff00", "NEUTRAL"
-            else:
-                trend_color, trend_signal = "#ff0000", "DOWNTREND"
-            
-            # ADX Assessment (trend strength)
-            adx_color, adx_signal = get_signal_color(adx, 25, 15, reverse=False)
-            if adx > 25:
-                adx_signal = "STRONG TREND"
-            elif adx > 15:
-                adx_signal = "MODERATE"
-            else:
-                adx_signal = "WEAK/RANGING"
-            
-            # Volume Assessment
-            vol_color, vol_signal = get_signal_color(volume_ratio, 1.5, 0.7, reverse=False)
-            
-            # Speedometer visualizations
-            def create_speedometer(value, title, min_val=0, max_val=100, thresholds=[30, 70]):
-                """Create a speedometer gauge"""
-                fig = go.Figure(go.Indicator(
-                    mode="gauge+number",
-                    value=value,
-                    title={'text': title, 'font': {'size': 16, 'color': '#FFFFFF'}},
-                    number={'font': {'size': 24, 'color': '#FFFFFF'}},
-                    gauge={
-                        'axis': {'range': [min_val, max_val], 'tickcolor': '#FFFFFF'},
-                        'bar': {'color': "#1f77b4"},
-                        'bgcolor': "rgba(0,0,0,0)",
-                        'borderwidth': 2,
-                        'bordercolor': "#404040",
-                        'steps': [
-                            {'range': [min_val, thresholds[0]], 'color': '#ff0000'},
-                            {'range': [thresholds[0], thresholds[1]], 'color': '#ffff00'},
-                            {'range': [thresholds[1], max_val], 'color': '#00ff00'}
-                        ],
-                        'threshold': {
-                            'line': {'color': "white", 'width': 4},
-                            'thickness': 0.75,
-                            'value': value
-                        }
-                    }
-                ))
-                fig.update_layout(
-                    height=250,
-                    margin=dict(l=20, r=20, t=50, b=20),
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    font={'color': '#FFFFFF'}
-                )
-                return fig
-            
-            # Display speedometers
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.plotly_chart(create_speedometer(rsi, "RSI (14)", 0, 100, [30, 70]), use_container_width=True)
-                st.markdown(f"<div style='text-align:center; color:{rsi_color}; font-size:20px; font-weight:bold;'>{rsi_signal}</div>", unsafe_allow_html=True)
-            
-            with col2:
-                st.plotly_chart(create_speedometer(adx, "ADX (Trend Strength)", 0, 50, [15, 25]), use_container_width=True)
-                st.markdown(f"<div style='text-align:center; color:{adx_color}; font-size:20px; font-weight:bold;'>{adx_signal}</div>", unsafe_allow_html=True)
-            
-            with col3:
-                volume_gauge_value = min(volume_ratio * 50, 100)  # Scale to 0-100
-                st.plotly_chart(create_speedometer(volume_gauge_value, "Volume (vs 20D Avg)", 0, 100, [50, 75]), use_container_width=True)
-                st.markdown(f"<div style='text-align:center; color:{vol_color}; font-size:20px; font-weight:bold;'>{vol_signal} ({volume_ratio:.2f}x)</div>", unsafe_allow_html=True)
-            
-            st.divider()
-            
-            # Technical Statistics Table
-            st.subheader("📋 Technical Statistics")
-            
-            stats_data = {
-                "Indicator": ["RSI (14)", "MACD", "Trend (SMA)", "ADX", "Volume Ratio", "Bollinger Band Position"],
-                "Value": [
-                    f"{rsi:.1f}",
-                    f"{macd:.2f}",
-                    f"{trend_score}/3 SMAs",
-                    f"{adx:.1f}",
-                    f"{volume_ratio:.2f}x",
-                    f"{bb_position:.1f}%" if bb_position else "N/A"
-                ],
-                "Signal": [
-                    rsi_signal,
-                    macd_signal_text,
-                    trend_signal,
-                    adx_signal,
-                    vol_signal,
-                    "Overbought" if bb_position and bb_position > 80 else ("Oversold" if bb_position and bb_position < 20 else "Normal") if bb_position else "N/A"
-                ],
-                "Color": [rsi_color, macd_color, trend_color, adx_color, vol_color, "#ffff00"]
-            }
-            
-            stats_df = pd.DataFrame(stats_data)
-            
-            # Create HTML table with colored signals
-            html_stats = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
-            html_stats += '<tr style="background:#1a1a1a; border-bottom:2px solid #404040;">'
-            html_stats += '<th style="padding:12px; text-align:left; color:#FFFFFF;">Indicator</th>'
-            html_stats += '<th style="padding:12px; text-align:center; color:#FFFFFF;">Value</th>'
-            html_stats += '<th style="padding:12px; text-align:center; color:#FFFFFF;">Signal</th>'
-            html_stats += '</tr>'
-            
-            for idx, row in stats_df.iterrows():
-                html_stats += '<tr style="border-bottom:1px solid #404040;">'
-                html_stats += f'<td style="padding:10px; color:#FFFFFF;">{row["Indicator"]}</td>'
-                html_stats += f'<td style="padding:10px; text-align:center; color:#FFFFFF;">{row["Value"]}</td>'
-                html_stats += f'<td style="padding:10px; text-align:center; background:{row["Color"]}; color:#000000; font-weight:bold;">{row["Signal"]}</td>'
-                html_stats += '</tr>'
-            
-            html_stats += '</table>'
-            st.markdown(html_stats, unsafe_allow_html=True)
-            
-            st.divider()
-            
-            # Overall Assessment
-            st.subheader("🎯 Overall Assessment")
-            
-            # Calculate overall score
-            bullish_signals = 0
-            bearish_signals = 0
-            
-            # RSI
-            if rsi < 30:
-                bullish_signals += 1
-            elif rsi > 70:
-                bearish_signals += 1
-            
-            # MACD
-            if macd > macd_signal:
-                bullish_signals += 1
-            else:
-                bearish_signals += 1
-            
-            # Trend
-            if trend_score >= 2:
-                bullish_signals += trend_score - 1
-            else:
-                bearish_signals += (2 - trend_score)
-            
-            # ADX (only if strong)
-            if adx > 25:
-                if trend_score >= 2:
-                    bullish_signals += 1
-                else:
-                    bearish_signals += 1
-            
-            # Volume
-            if volume_ratio > 1.5 and price_change_pct > 0:
-                bullish_signals += 1
-            elif volume_ratio > 1.5 and price_change_pct < 0:
-                bearish_signals += 1
-            
-            # Total signals
-            total_signals = bullish_signals + bearish_signals
-            bullish_pct = (bullish_signals / total_signals * 100) if total_signals > 0 else 50
-            
-            # Determine recommendation
-            if bullish_pct >= 70:
-                recommendation = "🟢 BUY"
-                rec_color = "#00ff00"
-                rec_text = "Strong bullish signals suggest buying opportunity"
-            elif bullish_pct >= 55:
-                recommendation = "🟢 ACCUMULATE"
-                rec_color = "#7FFF00"
-                rec_text = "Moderately bullish, consider gradual accumulation"
-            elif bullish_pct >= 45:
-                recommendation = "🟡 HOLD"
-                rec_color = "#ffff00"
-                rec_text = "Mixed signals, maintain current position"
-            elif bullish_pct >= 30:
-                recommendation = "🟠 REDUCE"
-                rec_color = "#FFA500"
-                rec_text = "Moderately bearish, consider reducing exposure"
-            else:
-                recommendation = "🔴 SELL"
-                rec_color = "#ff0000"
-                rec_text = "Strong bearish signals suggest selling"
-            
-            # Display recommendation
-            st.markdown(f"""
-            <div style="background:#1a1a1a; padding:30px; border-radius:10px; text-align:center; border: 3px solid {rec_color};">
-                <h1 style="color:{rec_color}; margin:0;">{recommendation}</h1>
-                <h3 style="color:#FFFFFF; margin:20px 0;">{rec_text}</h3>
-                <p style="color:#CCCCCC; font-size:16px;">
-                    Bullish Signals: {bullish_signals} | Bearish Signals: {bearish_signals} | Score: {bullish_pct:.0f}%
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.info("⚠️ This is an automated technical analysis. Always conduct your own research and consider fundamental factors before making investment decisions.")
-            
-        else:
-            st.warning("No data available for the selected period.")
-    
     except Exception as e:
-        st.error(f"Error loading chart data: {str(e)}")
+        st.error(f"Error loading chart: {e}")
 
 # ========================================
 # OPTIONS CHAIN
