@@ -1475,7 +1475,7 @@ elif selected == "Market Dashboard":
         return ((1 + total_return / 100) ** (1 / years) - 1) * 100
     
     def create_multi_period_table(df, title):
-        """Create table showing all periods"""
+        """Create table showing all periods with clickable ETF tickers"""
         st.markdown(f"### {title}")
         
         # Create HTML table
@@ -1521,6 +1521,22 @@ elif selected == "Market Dashboard":
         
         html += '</table>'
         st.markdown(html, unsafe_allow_html=True)
+        
+        # Add clickable ETF selector below table
+        st.write("")
+        etf_list = df['ETF'].tolist()
+        selected_etf = st.selectbox(
+            f"Analyze {title.split()[1]} ETF in detail:",
+            ["Select an ETF..."] + etf_list,
+            key=f"select_{title}"
+        )
+        
+        if selected_etf != "Select an ETF...":
+            if st.button(f"📊 View {selected_etf} Chart Analysis", key=f"btn_{title}_{selected_etf}"):
+                st.session_state['chart_ticker'] = selected_etf
+                st.session_state['nav_to_chart'] = True
+                st.rerun()
+        
         st.write("")
     
     def create_custom_period_table(df, title):
@@ -2045,24 +2061,82 @@ elif selected == "Performance":
 # ========================================
 
 elif selected == "Chart Analysis":
-    st.header("📈 Chart Analysis")
+    st.header("📈 Chart Analysis & Technical Assessment")
     
-    ticker_choice = st.selectbox("Select Ticker", TICKERS)
+    # Check if navigated from Market Dashboard
+    if 'nav_to_chart' in st.session_state and st.session_state['nav_to_chart']:
+        default_ticker = st.session_state.get('chart_ticker', 'SPY')
+        st.session_state['nav_to_chart'] = False
+    else:
+        default_ticker = 'SPY'
+    
+    # Build ticker list from all Market Dashboard categories
+    all_etfs = ['SPY']  # Start with SPY
+    for category_etfs in MARKET_ETFS.values():
+        all_etfs.extend(list(category_etfs.values()))
+    all_etfs = sorted(list(set(all_etfs)))  # Remove duplicates and sort
+    
+    # Find index of default ticker
+    try:
+        default_index = all_etfs.index(default_ticker)
+    except:
+        default_index = 0
+    
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        ticker_choice = st.selectbox("Select Ticker", all_etfs, index=default_index)
+    with col2:
+        period_type = st.radio("Period Type", ["Standard", "Custom"], horizontal=True)
+    
+    if period_type == "Standard":
+        with col3:
+            time_period = st.selectbox("Time Period", ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y", "Max"], index=5)
+    else:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            custom_start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=180))
+        with col_b:
+            custom_end_date = st.date_input("End Date", value=datetime.now())
     
     try:
         t = yf.Ticker(ticker_choice)
-        hist = t.history(period="6mo", interval="1d")
+        
+        # Fetch data based on period selection
+        if period_type == "Standard":
+            period_map = {
+                "1D": "1d", "5D": "5d", "1M": "1mo", "3M": "3mo",
+                "6M": "6mo", "YTD": "ytd", "1Y": "1y", "2Y": "2y",
+                "5Y": "5y", "Max": "max"
+            }
+            hist = t.history(period=period_map[time_period], interval="1d")
+        else:
+            hist = t.history(start=custom_start_date, end=custom_end_date, interval="1d")
         
         if not hist.empty:
             df = calculate_technical_indicators(hist)
             
-            # Create chart
+            # Current values
+            current_price = df['Close'].iloc[-1]
+            prev_close = df['Close'].iloc[-2] if len(df) >= 2 else current_price
+            price_change = current_price - prev_close
+            price_change_pct = (price_change / prev_close) * 100 if prev_close != 0 else 0
+            
+            # Display current price prominently
+            st.markdown(f"""
+            <div style="background:#1a1a1a; padding:20px; border-radius:10px; margin-bottom:20px;">
+                <h2 style="color:#FFFFFF; margin:0;">{ticker_choice}</h2>
+                <h1 style="color:{'#00ff00' if price_change >= 0 else '#ff0000'}; margin:10px 0;">${current_price:.2f}</h1>
+                <h3 style="color:{'#00ff00' if price_change >= 0 else '#ff0000'}; margin:0;">{price_change:+.2f} ({price_change_pct:+.2f}%)</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Create candlestick chart
             fig = make_subplots(
                 rows=3, cols=1,
                 shared_xaxes=True,
-                vertical_spacing=0.05,
+                vertical_spacing=0.03,
                 row_heights=[0.6, 0.2, 0.2],
-                subplot_titles=(f'{ticker_choice} Price', 'RSI', 'Volume')
+                subplot_titles=(f'{ticker_choice} Price & Moving Averages', 'RSI (14)', 'Volume')
             )
             
             # Candlestick
@@ -2075,14 +2149,15 @@ elif selected == "Chart Analysis":
                 name='Price'
             ), row=1, col=1)
             
-            # SMAs
-            for period, color in [(20, 'orange'), (50, 'blue'), (200, 'purple')]:
+            # Add SMAs
+            sma_colors = {20: '#FFA500', 50: '#0080FF', 200: '#FF00FF'}
+            for period, color in sma_colors.items():
                 if f'SMA_{period}' in df.columns:
                     fig.add_trace(go.Scatter(
                         x=df.index,
                         y=df[f'SMA_{period}'],
                         name=f'SMA {period}',
-                        line=dict(color=color, width=1)
+                        line=dict(color=color, width=2)
                     ), row=1, col=1)
             
             # RSI
@@ -2091,39 +2166,296 @@ elif selected == "Chart Analysis":
                     x=df.index,
                     y=df['RSI'],
                     name='RSI',
-                    line=dict(color='purple', width=1)
+                    line=dict(color='purple', width=1.5)
                 ), row=2, col=1)
                 
-                fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-                fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+                fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1, opacity=0.5)
+                fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1, opacity=0.5)
+                fig.add_hline(y=50, line_dash="dot", line_color="gray", row=2, col=1, opacity=0.3)
             
             # Volume
+            colors = ['red' if df['Close'].iloc[i] < df['Open'].iloc[i] else 'green' for i in range(len(df))]
             fig.add_trace(go.Bar(
                 x=df.index,
                 y=df['Volume'],
                 name='Volume',
-                marker_color='lightblue'
+                marker_color=colors,
+                opacity=0.5
             ), row=3, col=1)
             
-            fig.update_layout(height=800, showlegend=True, xaxis_rangeslider_visible=False)
+            fig.update_layout(
+                height=800,
+                showlegend=True,
+                xaxis_rangeslider_visible=False,
+                template='plotly_dark',
+                hovermode='x unified'
+            )
+            
+            fig.update_yaxes(title_text="Price ($)", row=1, col=1)
+            fig.update_yaxes(title_text="RSI", row=2, col=1)
+            fig.update_yaxes(title_text="Volume", row=3, col=1)
+            
             st.plotly_chart(fig, use_container_width=True)
             
-            # Current stats
-            st.subheader("Current Stats")
-            col1, col2, col3, col4 = st.columns(4)
+            st.divider()
             
-            current_price = df['Close'].iloc[-1]
-            rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 0
-            volume_ratio = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns else 1.0
-            adx = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
+            # Technical Analysis Statistics & Assessment
+            st.subheader("📊 Technical Analysis & Signals")
             
-            col1.metric("Price", f"${current_price:.2f}")
-            col2.metric("RSI", f"{rsi:.1f}")
-            col3.metric("Volume Ratio", f"{volume_ratio:.2f}x")
-            col4.metric("ADX", f"{adx:.1f}")
+            # Get technical values
+            rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50
+            macd = df['MACD'].iloc[-1] if 'MACD' in df.columns and not pd.isna(df['MACD'].iloc[-1]) else 0
+            macd_signal = df['MACD_Signal'].iloc[-1] if 'MACD_Signal' in df.columns and not pd.isna(df['MACD_Signal'].iloc[-1]) else 0
+            adx = df['ADX'].iloc[-1] if 'ADX' in df.columns and not pd.isna(df['ADX'].iloc[-1]) else 20
+            volume_ratio = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns and not pd.isna(df['Volume_Ratio'].iloc[-1]) else 1.0
             
+            # SMA positions
+            sma_20 = df['SMA_20'].iloc[-1] if 'SMA_20' in df.columns else current_price
+            sma_50 = df['SMA_50'].iloc[-1] if 'SMA_50' in df.columns else current_price
+            sma_200 = df['SMA_200'].iloc[-1] if 'SMA_200' in df.columns else current_price
+            
+            # Bollinger Bands
+            bb_position = None
+            if 'BB_Upper' in df.columns and 'BB_Lower' in df.columns:
+                bb_upper = df['BB_Upper'].iloc[-1]
+                bb_lower = df['BB_Lower'].iloc[-1]
+                bb_range = bb_upper - bb_lower
+                bb_position = ((current_price - bb_lower) / bb_range) * 100 if bb_range > 0 else 50
+            
+            # Calculate signals
+            def get_signal_color(value, bullish_threshold, bearish_threshold, reverse=False):
+                """Return color and assessment based on thresholds"""
+                if not reverse:
+                    if value >= bullish_threshold:
+                        return "#00ff00", "BULLISH"
+                    elif value <= bearish_threshold:
+                        return "#ff0000", "BEARISH"
+                    else:
+                        return "#ffff00", "NEUTRAL"
+                else:
+                    if value <= bullish_threshold:
+                        return "#00ff00", "BULLISH"
+                    elif value >= bearish_threshold:
+                        return "#ff0000", "BEARISH"
+                    else:
+                        return "#ffff00", "NEUTRAL"
+            
+            # RSI Assessment
+            rsi_color, rsi_signal = get_signal_color(rsi, 70, 30, reverse=True)
+            
+            # MACD Assessment
+            macd_bullish = macd > macd_signal
+            macd_color = "#00ff00" if macd_bullish else "#ff0000"
+            macd_signal_text = "BULLISH" if macd_bullish else "BEARISH"
+            
+            # Trend Assessment (SMA alignment)
+            price_above_sma20 = current_price > sma_20
+            price_above_sma50 = current_price > sma_50
+            price_above_sma200 = current_price > sma_200
+            
+            trend_score = sum([price_above_sma20, price_above_sma50, price_above_sma200])
+            if trend_score == 3:
+                trend_color, trend_signal = "#00ff00", "STRONG UPTREND"
+            elif trend_score == 2:
+                trend_color, trend_signal = "#7FFF00", "UPTREND"
+            elif trend_score == 1:
+                trend_color, trend_signal = "#ffff00", "NEUTRAL"
+            else:
+                trend_color, trend_signal = "#ff0000", "DOWNTREND"
+            
+            # ADX Assessment (trend strength)
+            adx_color, adx_signal = get_signal_color(adx, 25, 15, reverse=False)
+            if adx > 25:
+                adx_signal = "STRONG TREND"
+            elif adx > 15:
+                adx_signal = "MODERATE"
+            else:
+                adx_signal = "WEAK/RANGING"
+            
+            # Volume Assessment
+            vol_color, vol_signal = get_signal_color(volume_ratio, 1.5, 0.7, reverse=False)
+            
+            # Speedometer visualizations
+            def create_speedometer(value, title, min_val=0, max_val=100, thresholds=[30, 70]):
+                """Create a speedometer gauge"""
+                fig = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=value,
+                    title={'text': title, 'font': {'size': 16, 'color': '#FFFFFF'}},
+                    number={'font': {'size': 24, 'color': '#FFFFFF'}},
+                    gauge={
+                        'axis': {'range': [min_val, max_val], 'tickcolor': '#FFFFFF'},
+                        'bar': {'color': "#1f77b4"},
+                        'bgcolor': "rgba(0,0,0,0)",
+                        'borderwidth': 2,
+                        'bordercolor': "#404040",
+                        'steps': [
+                            {'range': [min_val, thresholds[0]], 'color': '#ff0000'},
+                            {'range': [thresholds[0], thresholds[1]], 'color': '#ffff00'},
+                            {'range': [thresholds[1], max_val], 'color': '#00ff00'}
+                        ],
+                        'threshold': {
+                            'line': {'color': "white", 'width': 4},
+                            'thickness': 0.75,
+                            'value': value
+                        }
+                    }
+                ))
+                fig.update_layout(
+                    height=250,
+                    margin=dict(l=20, r=20, t=50, b=20),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font={'color': '#FFFFFF'}
+                )
+                return fig
+            
+            # Display speedometers
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.plotly_chart(create_speedometer(rsi, "RSI (14)", 0, 100, [30, 70]), use_container_width=True)
+                st.markdown(f"<div style='text-align:center; color:{rsi_color}; font-size:20px; font-weight:bold;'>{rsi_signal}</div>", unsafe_allow_html=True)
+            
+            with col2:
+                st.plotly_chart(create_speedometer(adx, "ADX (Trend Strength)", 0, 50, [15, 25]), use_container_width=True)
+                st.markdown(f"<div style='text-align:center; color:{adx_color}; font-size:20px; font-weight:bold;'>{adx_signal}</div>", unsafe_allow_html=True)
+            
+            with col3:
+                volume_gauge_value = min(volume_ratio * 50, 100)  # Scale to 0-100
+                st.plotly_chart(create_speedometer(volume_gauge_value, "Volume (vs 20D Avg)", 0, 100, [50, 75]), use_container_width=True)
+                st.markdown(f"<div style='text-align:center; color:{vol_color}; font-size:20px; font-weight:bold;'>{vol_signal} ({volume_ratio:.2f}x)</div>", unsafe_allow_html=True)
+            
+            st.divider()
+            
+            # Technical Statistics Table
+            st.subheader("📋 Technical Statistics")
+            
+            stats_data = {
+                "Indicator": ["RSI (14)", "MACD", "Trend (SMA)", "ADX", "Volume Ratio", "Bollinger Band Position"],
+                "Value": [
+                    f"{rsi:.1f}",
+                    f"{macd:.2f}",
+                    f"{trend_score}/3 SMAs",
+                    f"{adx:.1f}",
+                    f"{volume_ratio:.2f}x",
+                    f"{bb_position:.1f}%" if bb_position else "N/A"
+                ],
+                "Signal": [
+                    rsi_signal,
+                    macd_signal_text,
+                    trend_signal,
+                    adx_signal,
+                    vol_signal,
+                    "Overbought" if bb_position and bb_position > 80 else ("Oversold" if bb_position and bb_position < 20 else "Normal") if bb_position else "N/A"
+                ],
+                "Color": [rsi_color, macd_color, trend_color, adx_color, vol_color, "#ffff00"]
+            }
+            
+            stats_df = pd.DataFrame(stats_data)
+            
+            # Create HTML table with colored signals
+            html_stats = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
+            html_stats += '<tr style="background:#1a1a1a; border-bottom:2px solid #404040;">'
+            html_stats += '<th style="padding:12px; text-align:left; color:#FFFFFF;">Indicator</th>'
+            html_stats += '<th style="padding:12px; text-align:center; color:#FFFFFF;">Value</th>'
+            html_stats += '<th style="padding:12px; text-align:center; color:#FFFFFF;">Signal</th>'
+            html_stats += '</tr>'
+            
+            for idx, row in stats_df.iterrows():
+                html_stats += '<tr style="border-bottom:1px solid #404040;">'
+                html_stats += f'<td style="padding:10px; color:#FFFFFF;">{row["Indicator"]}</td>'
+                html_stats += f'<td style="padding:10px; text-align:center; color:#FFFFFF;">{row["Value"]}</td>'
+                html_stats += f'<td style="padding:10px; text-align:center; background:{row["Color"]}; color:#000000; font-weight:bold;">{row["Signal"]}</td>'
+                html_stats += '</tr>'
+            
+            html_stats += '</table>'
+            st.markdown(html_stats, unsafe_allow_html=True)
+            
+            st.divider()
+            
+            # Overall Assessment
+            st.subheader("🎯 Overall Assessment")
+            
+            # Calculate overall score
+            bullish_signals = 0
+            bearish_signals = 0
+            
+            # RSI
+            if rsi < 30:
+                bullish_signals += 1
+            elif rsi > 70:
+                bearish_signals += 1
+            
+            # MACD
+            if macd > macd_signal:
+                bullish_signals += 1
+            else:
+                bearish_signals += 1
+            
+            # Trend
+            if trend_score >= 2:
+                bullish_signals += trend_score - 1
+            else:
+                bearish_signals += (2 - trend_score)
+            
+            # ADX (only if strong)
+            if adx > 25:
+                if trend_score >= 2:
+                    bullish_signals += 1
+                else:
+                    bearish_signals += 1
+            
+            # Volume
+            if volume_ratio > 1.5 and price_change_pct > 0:
+                bullish_signals += 1
+            elif volume_ratio > 1.5 and price_change_pct < 0:
+                bearish_signals += 1
+            
+            # Total signals
+            total_signals = bullish_signals + bearish_signals
+            bullish_pct = (bullish_signals / total_signals * 100) if total_signals > 0 else 50
+            
+            # Determine recommendation
+            if bullish_pct >= 70:
+                recommendation = "🟢 BUY"
+                rec_color = "#00ff00"
+                rec_text = "Strong bullish signals suggest buying opportunity"
+            elif bullish_pct >= 55:
+                recommendation = "🟢 ACCUMULATE"
+                rec_color = "#7FFF00"
+                rec_text = "Moderately bullish, consider gradual accumulation"
+            elif bullish_pct >= 45:
+                recommendation = "🟡 HOLD"
+                rec_color = "#ffff00"
+                rec_text = "Mixed signals, maintain current position"
+            elif bullish_pct >= 30:
+                recommendation = "🟠 REDUCE"
+                rec_color = "#FFA500"
+                rec_text = "Moderately bearish, consider reducing exposure"
+            else:
+                recommendation = "🔴 SELL"
+                rec_color = "#ff0000"
+                rec_text = "Strong bearish signals suggest selling"
+            
+            # Display recommendation
+            st.markdown(f"""
+            <div style="background:#1a1a1a; padding:30px; border-radius:10px; text-align:center; border: 3px solid {rec_color};">
+                <h1 style="color:{rec_color}; margin:0;">{recommendation}</h1>
+                <h3 style="color:#FFFFFF; margin:20px 0;">{rec_text}</h3>
+                <p style="color:#CCCCCC; font-size:16px;">
+                    Bullish Signals: {bullish_signals} | Bearish Signals: {bearish_signals} | Score: {bullish_pct:.0f}%
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.info("⚠️ This is an automated technical analysis. Always conduct your own research and consider fundamental factors before making investment decisions.")
+            
+        else:
+            st.warning("No data available for the selected period.")
+    
     except Exception as e:
-        st.error(f"Error loading chart: {e}")
+        st.error(f"Error loading chart data: {str(e)}")
 
 # ========================================
 # OPTIONS CHAIN
