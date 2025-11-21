@@ -1158,113 +1158,187 @@ elif selected == "Market Dashboard":
     st.header("📊 Market Dashboard")
     st.caption("Comprehensive market overview across asset classes, sectors, countries, and factors")
     
-    # Date range selector
-    col1, col2, col3, col4 = st.columns(4)
+    # Control panel
+    col1, col2 = st.columns([3, 1])
     with col1:
-        period_type = st.radio("Period Type", ["Standard", "Custom"], horizontal=True)
-    
-    if period_type == "Standard":
-        with col2:
-            time_period = st.selectbox(
-                "Select Period",
-                ["Today", "MTD", "YTD", "1yr", "3yr", "5yr", "10yr"],
-                index=2
-            )
-        
-        # Calculate date range based on selection
-        end_date = datetime.now()
-        if time_period == "Today":
-            start_date = end_date - timedelta(days=1)
-        elif time_period == "MTD":
-            start_date = end_date.replace(day=1)
-        elif time_period == "YTD":
-            start_date = end_date.replace(month=1, day=1)
-        elif time_period == "1yr":
-            start_date = end_date - timedelta(days=365)
-        elif time_period == "3yr":
-            start_date = end_date - timedelta(days=365*3)
-        elif time_period == "5yr":
-            start_date = end_date - timedelta(days=365*5)
-        else:  # 10yr
-            start_date = end_date - timedelta(days=365*10)
-    else:
-        with col2:
-            start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=365))
-            start_date = datetime.combine(start_date, datetime.min.time())
-        with col3:
-            end_date = st.date_input("End Date", value=datetime.now())
-            end_date = datetime.combine(end_date, datetime.min.time())
-        time_period = f"{start_date.strftime('%m/%d/%Y')} - {end_date.strftime('%m/%d/%Y')}"
-    
-    with col4:
+        view_mode = st.radio("View Mode", ["Standard Periods", "Custom Period"], horizontal=True)
+    with col2:
         if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
     
-    # Market data configuration
+    # Custom period selection (only shown if selected)
+    if view_mode == "Custom Period":
+        col1, col2 = st.columns(2)
+        with col1:
+            custom_start = st.date_input("Start Date", value=datetime.now() - timedelta(days=365))
+        with col2:
+            custom_end = st.date_input("End Date", value=datetime.now())
+    
+    # Market data configuration - EXPANDED
     MARKET_ETFS = {
         "Equities": {
-            "Large Cap": "IVV",  # iShares Core S&P 500
-            "SMID": "SMMD",  # iShares Russell 2500
-            "All Cap": "ITOT",  # iShares Core S&P Total US
-            "Developed Markets": "EFA",  # iShares MSCI EAFE
-            "Emerging Markets": "EEM",  # iShares MSCI Emerging Markets
-            "World ex-US": "ACWX",  # iShares MSCI ACWI ex US
-            "World": "ACWI"  # iShares MSCI ACWI
+            "Large Cap": "IVV",
+            "Mid Cap": "IJH",
+            "Small Cap": "IJR",
+            "SMID": "SMMD",
+            "All Cap": "ITOT",
+            "Developed Markets": "EFA",
+            "Emerging Markets": "EEM",
+            "World ex-US": "ACWX",
+            "World": "ACWI"
         },
         "Fixed Income": {
-            "Aggregate": "AGG",  # iShares Core US Aggregate Bond
-            "Municipals": "MUB",  # iShares National Muni Bond
-            "High Yield Corporate": "HYG"  # iShares iBoxx High Yield Corporate
+            "Aggregate": "AGG",
+            "Short-Term Treasury": "SHV",
+            "Intermediate Treasury": "IEF",
+            "Long-Term Treasury": "TLT",
+            "TIPS": "TIP",
+            "Investment Grade Corp": "LQD",
+            "High Yield Corporate": "HYG",
+            "Emerging Market Bonds": "EMB",
+            "Municipals": "MUB",
+            "Mortgage-Backed": "MBB",
+            "Floating Rate": "FLOT"
         },
         "Real Assets": {
-            "Bitcoin": "IBIT",  # iShares Bitcoin Trust
-            "Gold": "IAU",  # iShares Gold Trust
-            "Commodity Basket": "GSG",  # iShares S&P GSCI Commodity
-            "Natural Resources": "IGE",  # iShares Natural Resources
-            "Oil": "DBO"  # Invesco DB Oil
+            "Bitcoin": "IBIT",
+            "Gold": "IAU",
+            "Silver": "SLV",
+            "Commodity Basket": "GSG",
+            "Natural Resources": "IGE",
+            "Oil": "DBO",
+            "Real Estate": "IYR",
+            "Infrastructure": "IGF",
+            "Timber": "WOOD"
         },
         "S&P Sectors": {
-            "Communication Services": "XLC",  # Communication Services SPDR
-            "Consumer Discretionary": "XLY",  # Consumer Discretionary SPDR
-            "Consumer Staples": "XLP",  # Consumer Staples SPDR
-            "Energy": "XLE",  # Energy SPDR
-            "Financials": "XLF",  # Financial SPDR
-            "Health Care": "XLV",  # Health Care SPDR
-            "Industrials": "XLI",  # Industrial SPDR
-            "Materials": "XLB",  # Materials SPDR
-            "Real Estate": "XLRE",  # Real Estate SPDR
-            "Technology": "XLK",  # Technology SPDR
-            "Utilities": "XLU"  # Utilities SPDR
+            "Communication Services": "XLC",
+            "Consumer Discretionary": "XLY",
+            "Consumer Staples": "XLP",
+            "Energy": "XLE",
+            "Financials": "XLF",
+            "Health Care": "XLV",
+            "Industrials": "XLI",
+            "Materials": "XLB",
+            "Real Estate": "XLRE",
+            "Technology": "XLK",
+            "Utilities": "XLU"
         },
-        "Countries": {
-            "United States": "SPY",  # SPDR S&P 500
-            "Canada": "EWC",  # iShares MSCI Canada
-            "United Kingdom": "EWU",  # iShares MSCI United Kingdom
-            "Germany": "EWG",  # iShares MSCI Germany
-            "France": "EWQ",  # iShares MSCI France
-            "Japan": "EWJ",  # iShares MSCI Japan
-            "China": "MCHI",  # iShares MSCI China
-            "India": "INDA",  # iShares MSCI India
-            "Brazil": "EWZ",  # iShares MSCI Brazil
-            "Australia": "EWA",  # iShares MSCI Australia
-            "South Korea": "EWY",  # iShares MSCI South Korea
-            "Mexico": "EWW"  # iShares MSCI Mexico
+        "Developed Markets": {
+            "United States": "SPY",
+            "Canada": "EWC",
+            "United Kingdom": "EWU",
+            "Germany": "EWG",
+            "France": "EWQ",
+            "Italy": "EWI",
+            "Spain": "EWP",
+            "Netherlands": "EWN",
+            "Switzerland": "EWL",
+            "Belgium": "EWK",
+            "Sweden": "EWD",
+            "Japan": "EWJ",
+            "Australia": "EWA",
+            "Hong Kong": "EWH",
+            "Singapore": "EWS",
+            "South Korea": "EWY"
+        },
+        "Emerging Markets": {
+            "China": "MCHI",
+            "India": "INDA",
+            "Brazil": "EWZ",
+            "Mexico": "EWW",
+            "South Africa": "EZA",
+            "Taiwan": "EWT",
+            "Russia": "ERUS",
+            "Turkey": "TUR",
+            "Indonesia": "EIDO",
+            "Thailand": "THD",
+            "Malaysia": "EWM",
+            "Philippines": "EPHE",
+            "Chile": "ECH",
+            "Colombia": "GXG",
+            "Peru": "EPU",
+            "Poland": "EPOL"
         },
         "Factors": {
-            "Value": "VLUE",  # iShares MSCI USA Value Factor
-            "Momentum": "MTUM",  # iShares MSCI USA Momentum Factor
-            "Quality": "QUAL",  # iShares MSCI USA Quality Factor
-            "Size (Small Cap)": "SIZE",  # iShares MSCI USA Size Factor
-            "Low Volatility": "USMV",  # iShares MSCI USA Min Vol Factor
-            "Dividend": "DVY",  # iShares Select Dividend
-            "Growth": "IVW"  # iShares S&P 500 Growth
+            "Value": "VLUE",
+            "Momentum": "MTUM",
+            "Quality": "QUAL",
+            "Size (Small Cap)": "SIZE",
+            "Low Volatility": "USMV",
+            "Dividend": "DVY",
+            "Growth": "IVW",
+            "High Dividend": "HDV"
         }
     }
     
+    # Define standard periods
+    STANDARD_PERIODS = {
+        "Today": 1,
+        "MTD": "mtd",
+        "YTD": "ytd",
+        "1yr": 252,
+        "3yr": 756,
+        "5yr": 1260,
+        "10yr": 2520
+    }
+    
     @st.cache_data(ttl=300)
-    def fetch_market_performance(tickers_dict, start, end):
-        """Fetch performance data for all market segments"""
+    def fetch_multi_period_performance(tickers_dict):
+        """Fetch performance data for all periods at once"""
+        results = {}
+        end_date = datetime.now()
+        
+        for category, tickers in tickers_dict.items():
+            category_data = []
+            
+            for name, ticker in tickers.items():
+                try:
+                    # Fetch enough data for longest period
+                    t = yf.Ticker(ticker)
+                    hist = t.history(period="max")
+                    
+                    if hist.empty:
+                        continue
+                    
+                    row_data = {'Name': name, 'ETF': ticker}
+                    
+                    # Calculate returns for each period
+                    for period_name, period_value in STANDARD_PERIODS.items():
+                        try:
+                            if period_value == "mtd":
+                                period_start = end_date.replace(day=1)
+                                period_hist = hist[hist.index >= period_start]
+                            elif period_value == "ytd":
+                                period_start = end_date.replace(month=1, day=1)
+                                period_hist = hist[hist.index >= period_start]
+                            else:
+                                # Use trading days
+                                period_hist = hist.tail(period_value + 1)
+                            
+                            if len(period_hist) >= 2:
+                                start_price = period_hist['Close'].iloc[0]
+                                end_price = period_hist['Close'].iloc[-1]
+                                return_pct = ((end_price - start_price) / start_price) * 100
+                                row_data[period_name] = return_pct
+                            else:
+                                row_data[period_name] = None
+                        except:
+                            row_data[period_name] = None
+                    
+                    category_data.append(row_data)
+                except:
+                    continue
+            
+            if category_data:
+                results[category] = pd.DataFrame(category_data)
+        
+        return results
+    
+    @st.cache_data(ttl=300)
+    def fetch_custom_period_performance(tickers_dict, start, end):
+        """Fetch performance for custom date range"""
         results = {}
         
         for category, tickers in tickers_dict.items():
@@ -1283,9 +1357,7 @@ elif selected == "Market Dashboard":
                         category_data.append({
                             'Name': name,
                             'ETF': ticker,
-                            'Return': return_pct,
-                            'Start Price': start_price,
-                            'End Price': end_price
+                            'Return': return_pct
                         })
                 except:
                     continue
@@ -1295,137 +1367,176 @@ elif selected == "Market Dashboard":
         
         return results
     
-    # Fetch all market data
-    with st.spinner("Loading market data..."):
-        market_performance = fetch_market_performance(MARKET_ETFS, start_date, end_date)
+    def get_color_from_return(return_val):
+        """Get graduated color based on return value"""
+        if pd.isna(return_val):
+            return '#404040', '#FFFFFF'
+        
+        # More granular color grading
+        if return_val >= 50:
+            return '#004d00', '#FFFFFF'  # Darkest green
+        elif return_val >= 30:
+            return '#006600', '#FFFFFF'
+        elif return_val >= 20:
+            return '#008000', '#FFFFFF'
+        elif return_val >= 15:
+            return '#009900', '#FFFFFF'
+        elif return_val >= 10:
+            return '#00b300', '#FFFFFF'
+        elif return_val >= 5:
+            return '#00cc00', '#000000'
+        elif return_val >= 2:
+            return '#00e600', '#000000'
+        elif return_val >= 0:
+            return '#99ff99', '#000000'  # Light green
+        elif return_val >= -2:
+            return '#ffcccc', '#000000'  # Light red
+        elif return_val >= -5:
+            return '#ff9999', '#000000'
+        elif return_val >= -10:
+            return '#ff6666', '#FFFFFF'
+        elif return_val >= -15:
+            return '#ff3333', '#FFFFFF'
+        elif return_val >= -20:
+            return '#cc0000', '#FFFFFF'
+        elif return_val >= -30:
+            return '#990000', '#FFFFFF'
+        else:
+            return '#660000', '#FFFFFF'  # Darkest red
     
-    # Helper function to create colored table
-    def create_performance_table(df, title):
-        """Create a styled performance table"""
-        st.subheader(title)
+    def create_multi_period_table(df, title):
+        """Create table showing all periods"""
+        st.markdown(f"### {title}")
         
-        # Create display dataframe
-        display_df = df[['Name', 'ETF', 'Return']].copy()
+        # Create HTML table
+        periods = ["Today", "MTD", "YTD", "1yr", "3yr", "5yr", "10yr"]
         
-        # Create color-coded HTML table
-        html = '<table style="width:100%; border-collapse: collapse;">'
-        html += '<tr style="background:#2d2d2d;"><th style="padding:10px; text-align:left;">Name</th><th style="padding:10px; text-align:left;">ETF</th><th style="padding:10px; text-align:right;">Return</th></tr>'
+        html = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
         
-        for idx, row in display_df.iterrows():
-            return_val = row['Return']
+        # Header row
+        html += '<tr style="background:#1a1a1a; border-bottom: 2px solid #404040;">'
+        html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">Name</th>'
+        html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">ETF</th>'
+        for period in periods:
+            html += f'<th style="padding:12px; text-align:right; color:#FFFFFF; {"border-right:1px solid #404040;" if period != periods[-1] else ""}">{period}</th>'
+        html += '</tr>'
+        
+        # Data rows
+        for idx, row in df.iterrows():
+            html += '<tr style="border-bottom:1px solid #404040;">'
+            html += f'<td style="padding:10px; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
+            html += f'<td style="padding:10px; color:#CCCCCC; border-right:1px solid #404040;">{row["ETF"]}</td>'
             
-            # Color coding
-            if return_val > 10:
-                bg_color = '#006400'  # Dark green
-            elif return_val > 5:
-                bg_color = '#228B22'  # Green
-            elif return_val > 0:
-                bg_color = '#90EE90'  # Light green
-                text_color = '#000'
-            elif return_val > -5:
-                bg_color = '#FFB6C1'  # Light red
-                text_color = '#000'
-            elif return_val > -10:
-                bg_color = '#DC143C'  # Red
-            else:
-                bg_color = '#8B0000'  # Dark red
+            for period in periods:
+                return_val = row.get(period)
+                bg_color, text_color = get_color_from_return(return_val)
+                
+                if pd.isna(return_val):
+                    display_val = "N/A"
+                else:
+                    display_val = f"{return_val:+.1f}%"
+                
+                html += f'<td style="padding:10px; background:{bg_color}; color:{text_color}; text-align:right; font-weight:bold; {"border-right:1px solid #404040;" if period != periods[-1] else ""}">{display_val}</td>'
             
-            # Text color (white for dark backgrounds, black for light)
-            if return_val <= 0 or return_val > 5:
-                text_color = '#FFF'
-            else:
-                text_color = '#000'
-            
-            html += f'<tr style="background:{bg_color}; color:{text_color};">'
-            html += f'<td style="padding:8px;">{row["Name"]}</td>'
-            html += f'<td style="padding:8px;">{row["ETF"]}</td>'
-            html += f'<td style="padding:8px; text-align:right; font-weight:bold;">{return_val:+.2f}%</td>'
             html += '</tr>'
         
         html += '</table>'
         st.markdown(html, unsafe_allow_html=True)
+        st.write("")
     
-    # Display all sections
+    def create_custom_period_table(df, title):
+        """Create table for custom period"""
+        st.markdown(f"### {title}")
+        
+        html = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
+        
+        # Header
+        html += '<tr style="background:#1a1a1a; border-bottom: 2px solid #404040;">'
+        html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">Name</th>'
+        html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">ETF</th>'
+        html += '<th style="padding:12px; text-align:right; color:#FFFFFF;">Return</th>'
+        html += '</tr>'
+        
+        # Data rows
+        for idx, row in df.iterrows():
+            return_val = row['Return']
+            bg_color, text_color = get_color_from_return(return_val)
+            
+            html += '<tr style="border-bottom:1px solid #404040;">'
+            html += f'<td style="padding:10px; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
+            html += f'<td style="padding:10px; color:#CCCCCC; border-right:1px solid #404040;">{row["ETF"]}</td>'
+            html += f'<td style="padding:10px; background:{bg_color}; color:{text_color}; text-align:right; font-weight:bold;">{return_val:+.1f}%</td>'
+            html += '</tr>'
+        
+        html += '</table>'
+        st.markdown(html, unsafe_allow_html=True)
+        st.write("")
+    
+    # Fetch data based on view mode
+    with st.spinner("Loading market data..."):
+        if view_mode == "Standard Periods":
+            market_performance = fetch_multi_period_performance(MARKET_ETFS)
+        else:
+            market_performance = fetch_custom_period_performance(
+                MARKET_ETFS, 
+                datetime.combine(custom_start, datetime.min.time()),
+                datetime.combine(custom_end, datetime.min.time())
+            )
+    
+    # Display data
     if market_performance:
-        # Summary metrics at top
-        st.subheader(f"Performance Summary - {time_period}")
-        
-        # Calculate overall statistics
-        all_returns = []
-        for category_df in market_performance.values():
-            all_returns.extend(category_df['Return'].tolist())
-        
-        if all_returns:
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Avg Return", f"{np.mean(all_returns):.2f}%")
-            col2.metric("Best Performer", f"{max(all_returns):.2f}%")
-            col3.metric("Worst Performer", f"{min(all_returns):.2f}%")
-            col4.metric("Positive Assets", f"{sum(1 for r in all_returns if r > 0)}/{len(all_returns)}")
-        
-        st.divider()
-        
-        # Display each category
-        col1, col2 = st.columns(2)
-        
-        with col1:
+        # Display each category vertically
+        if view_mode == "Standard Periods":
             if "Equities" in market_performance:
-                create_performance_table(market_performance["Equities"], "📈 Equities")
-                st.write("")
+                create_multi_period_table(market_performance["Equities"], "📈 Equities")
             
             if "Fixed Income" in market_performance:
-                create_performance_table(market_performance["Fixed Income"], "📊 Fixed Income")
-                st.write("")
+                create_multi_period_table(market_performance["Fixed Income"], "📊 Fixed Income")
             
-            if "Countries" in market_performance:
-                create_performance_table(market_performance["Countries"], "🌍 Countries")
-        
-        with col2:
             if "Real Assets" in market_performance:
-                create_performance_table(market_performance["Real Assets"], "💰 Real Assets")
-                st.write("")
+                create_multi_period_table(market_performance["Real Assets"], "💰 Real Assets")
             
             if "S&P Sectors" in market_performance:
-                create_performance_table(market_performance["S&P Sectors"], "🏭 S&P Sectors")
-                st.write("")
+                create_multi_period_table(market_performance["S&P Sectors"], "🏭 S&P Sectors")
+            
+            if "Developed Markets" in market_performance:
+                create_multi_period_table(market_performance["Developed Markets"], "🌍 Developed Markets")
+            
+            if "Emerging Markets" in market_performance:
+                create_multi_period_table(market_performance["Emerging Markets"], "🌏 Emerging Markets")
             
             if "Factors" in market_performance:
-                create_performance_table(market_performance["Factors"], "🎯 Factors")
+                create_multi_period_table(market_performance["Factors"], "🎯 Factors")
         
-        st.divider()
-        
-        # Sector performance chart
-        if "S&P Sectors" in market_performance:
-            st.subheader("📊 Sector Performance Chart")
-            sector_df = market_performance["S&P Sectors"].sort_values('Return', ascending=True)
+        else:  # Custom period
+            period_label = f"{custom_start.strftime('%m/%d/%Y')} - {custom_end.strftime('%m/%d/%Y')}"
+            st.subheader(f"Custom Period: {period_label}")
             
-            fig = go.Figure()
-            colors = ['red' if x < 0 else 'green' for x in sector_df['Return']]
+            if "Equities" in market_performance:
+                create_custom_period_table(market_performance["Equities"], "📈 Equities")
             
-            fig.add_trace(go.Bar(
-                y=sector_df['Name'],
-                x=sector_df['Return'],
-                orientation='h',
-                marker_color=colors,
-                text=sector_df['Return'].apply(lambda x: f'{x:+.1f}%'),
-                textposition='outside'
-            ))
+            if "Fixed Income" in market_performance:
+                create_custom_period_table(market_performance["Fixed Income"], "📊 Fixed Income")
             
-            fig.update_layout(
-                title=f"Sector Performance - {time_period}",
-                xaxis_title="Return (%)",
-                yaxis_title="Sector",
-                height=500,
-                template='plotly_dark',
-                showlegend=False
-            )
+            if "Real Assets" in market_performance:
+                create_custom_period_table(market_performance["Real Assets"], "💰 Real Assets")
             
-            st.plotly_chart(fig, use_container_width=True)
+            if "S&P Sectors" in market_performance:
+                create_custom_period_table(market_performance["S&P Sectors"], "🏭 S&P Sectors")
+            
+            if "Developed Markets" in market_performance:
+                create_custom_period_table(market_performance["Developed Markets"], "🌍 Developed Markets")
+            
+            if "Emerging Markets" in market_performance:
+                create_custom_period_table(market_performance["Emerging Markets"], "🌏 Emerging Markets")
+            
+            if "Factors" in market_performance:
+                create_custom_period_table(market_performance["Factors"], "🎯 Factors")
         
         # Export functionality
         st.divider()
         
         if st.button("📥 Export All Data to CSV"):
-            # Combine all dataframes
             export_data = []
             for category, df in market_performance.items():
                 df_copy = df.copy()
@@ -1442,7 +1553,7 @@ elif selected == "Market Dashboard":
                     "text/csv"
                 )
     else:
-        st.warning("No market data available for the selected period")
+        st.warning("No market data available")
 
 # ========================================
 # SIGNAL HISTORY PAGE
