@@ -1288,42 +1288,56 @@ elif selected == "Market Dashboard":
     def fetch_multi_period_performance(tickers_dict):
         """Fetch performance data for all periods at once"""
         results = {}
-        end_date = datetime.now()
         
         # Get the most recent trading day
         def get_last_trading_day():
-            """Get the last valid trading day"""
-            check_date = datetime.now()
+            """Get the last valid trading day accounting for market hours, weekends, and holidays"""
+            now = datetime.now(ZoneInfo("US/Eastern"))
+            check_date = now
+            
+            # If before 4pm today, use yesterday. If after 4pm, can use today if it's a trading day
+            if now.hour < 16:
+                check_date = now - timedelta(days=1)
+            
+            # Now go back to find last valid trading day
             for _ in range(10):  # Check up to 10 days back
                 # Skip weekends
-                if check_date.weekday() < 5:  # Monday = 0, Friday = 4
-                    # Check if it's a US market holiday (simplified)
-                    us_holidays = [
-                        datetime(2024, 1, 1),   # New Year's Day
-                        datetime(2024, 1, 15),  # MLK Day
-                        datetime(2024, 2, 19),  # Presidents Day
-                        datetime(2024, 3, 29),  # Good Friday
-                        datetime(2024, 5, 27),  # Memorial Day
-                        datetime(2024, 6, 19),  # Juneteenth
-                        datetime(2024, 7, 4),   # Independence Day
-                        datetime(2024, 9, 2),   # Labor Day
-                        datetime(2024, 11, 28), # Thanksgiving
-                        datetime(2024, 12, 25), # Christmas
-                        datetime(2025, 1, 1),   # New Year's Day
-                        datetime(2025, 1, 20),  # MLK Day
-                        datetime(2025, 2, 17),  # Presidents Day
-                        datetime(2025, 4, 18),  # Good Friday
-                        datetime(2025, 5, 26),  # Memorial Day
-                        datetime(2025, 6, 19),  # Juneteenth
-                        datetime(2025, 7, 4),   # Independence Day
-                        datetime(2025, 9, 1),   # Labor Day
-                        datetime(2025, 11, 27), # Thanksgiving
-                        datetime(2025, 12, 25)  # Christmas
-                    ]
-                    if check_date.date() not in [h.date() for h in us_holidays]:
-                        return check_date
-                check_date = check_date - timedelta(days=1)
-            return datetime.now()
+                if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
+                    check_date = check_date - timedelta(days=1)
+                    continue
+                
+                # Check if it's a US market holiday
+                us_holidays = [
+                    datetime(2024, 1, 1),   # New Year's Day
+                    datetime(2024, 1, 15),  # MLK Day
+                    datetime(2024, 2, 19),  # Presidents Day
+                    datetime(2024, 3, 29),  # Good Friday
+                    datetime(2024, 5, 27),  # Memorial Day
+                    datetime(2024, 6, 19),  # Juneteenth
+                    datetime(2024, 7, 4),   # Independence Day
+                    datetime(2024, 9, 2),   # Labor Day
+                    datetime(2024, 11, 28), # Thanksgiving
+                    datetime(2024, 12, 25), # Christmas
+                    datetime(2025, 1, 1),   # New Year's Day
+                    datetime(2025, 1, 20),  # MLK Day
+                    datetime(2025, 2, 17),  # Presidents Day
+                    datetime(2025, 4, 18),  # Good Friday
+                    datetime(2025, 5, 26),  # Memorial Day
+                    datetime(2025, 6, 19),  # Juneteenth
+                    datetime(2025, 7, 4),   # Independence Day
+                    datetime(2025, 9, 1),   # Labor Day
+                    datetime(2025, 11, 27), # Thanksgiving
+                    datetime(2025, 12, 25)  # Christmas
+                ]
+                
+                if check_date.date() in [h.date() for h in us_holidays]:
+                    check_date = check_date - timedelta(days=1)
+                    continue
+                
+                # Found a valid trading day
+                return check_date
+            
+            return now
         
         last_trading_day = get_last_trading_day()
         
@@ -1334,13 +1348,14 @@ elif selected == "Market Dashboard":
                 try:
                     # Fetch enough data for longest period
                     t = yf.Ticker(ticker)
+                    # Get more history to ensure we have enough data
                     hist = t.history(period="max")
                     
                     if hist.empty:
                         continue
                     
-                    # Ensure we have data up to the last trading day
-                    hist = hist[hist.index <= last_trading_day]
+                    # Filter to only data up to last trading day
+                    hist = hist[hist.index.date <= last_trading_day.date()]
                     
                     if len(hist) < 2:
                         continue
@@ -1351,19 +1366,20 @@ elif selected == "Market Dashboard":
                     for period_name, period_value in STANDARD_PERIODS.items():
                         try:
                             if period_value == "mtd":
-                                # Month to date - first day of current month to last trading day
+                                # Month to date - first day of month containing last_trading_day
                                 period_start = last_trading_day.replace(day=1)
                                 period_hist = hist[hist.index >= period_start]
                             elif period_value == "ytd":
-                                # Year to date - first day of current year to last trading day
+                                # Year to date - first day of year containing last_trading_day
                                 period_start = last_trading_day.replace(month=1, day=1)
                                 period_hist = hist[hist.index >= period_start]
                             elif period_value == 1:
-                                # Today - last 2 trading days
+                                # "Today" - last 2 trading days for day-over-day change
                                 period_hist = hist.tail(2)
                             else:
-                                # Use trading days (approximately)
-                                period_hist = hist.tail(period_value + 1)
+                                # Use number of trading days
+                                # Add some buffer to ensure we get enough data
+                                period_hist = hist.tail(int(period_value * 1.2))
                             
                             if len(period_hist) >= 2:
                                 start_price = period_hist['Close'].iloc[0]
@@ -1372,11 +1388,11 @@ elif selected == "Market Dashboard":
                                 row_data[period_name] = return_pct
                             else:
                                 row_data[period_name] = None
-                        except:
+                        except Exception as e:
                             row_data[period_name] = None
                     
                     category_data.append(row_data)
-                except:
+                except Exception as e:
                     continue
             
             if category_data:
