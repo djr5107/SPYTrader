@@ -1290,6 +1290,43 @@ elif selected == "Market Dashboard":
         results = {}
         end_date = datetime.now()
         
+        # Get the most recent trading day
+        def get_last_trading_day():
+            """Get the last valid trading day"""
+            check_date = datetime.now()
+            for _ in range(10):  # Check up to 10 days back
+                # Skip weekends
+                if check_date.weekday() < 5:  # Monday = 0, Friday = 4
+                    # Check if it's a US market holiday (simplified)
+                    us_holidays = [
+                        datetime(2024, 1, 1),   # New Year's Day
+                        datetime(2024, 1, 15),  # MLK Day
+                        datetime(2024, 2, 19),  # Presidents Day
+                        datetime(2024, 3, 29),  # Good Friday
+                        datetime(2024, 5, 27),  # Memorial Day
+                        datetime(2024, 6, 19),  # Juneteenth
+                        datetime(2024, 7, 4),   # Independence Day
+                        datetime(2024, 9, 2),   # Labor Day
+                        datetime(2024, 11, 28), # Thanksgiving
+                        datetime(2024, 12, 25), # Christmas
+                        datetime(2025, 1, 1),   # New Year's Day
+                        datetime(2025, 1, 20),  # MLK Day
+                        datetime(2025, 2, 17),  # Presidents Day
+                        datetime(2025, 4, 18),  # Good Friday
+                        datetime(2025, 5, 26),  # Memorial Day
+                        datetime(2025, 6, 19),  # Juneteenth
+                        datetime(2025, 7, 4),   # Independence Day
+                        datetime(2025, 9, 1),   # Labor Day
+                        datetime(2025, 11, 27), # Thanksgiving
+                        datetime(2025, 12, 25)  # Christmas
+                    ]
+                    if check_date.date() not in [h.date() for h in us_holidays]:
+                        return check_date
+                check_date = check_date - timedelta(days=1)
+            return datetime.now()
+        
+        last_trading_day = get_last_trading_day()
+        
         for category, tickers in tickers_dict.items():
             category_data = []
             
@@ -1302,19 +1339,30 @@ elif selected == "Market Dashboard":
                     if hist.empty:
                         continue
                     
+                    # Ensure we have data up to the last trading day
+                    hist = hist[hist.index <= last_trading_day]
+                    
+                    if len(hist) < 2:
+                        continue
+                    
                     row_data = {'Name': name, 'ETF': ticker}
                     
                     # Calculate returns for each period
                     for period_name, period_value in STANDARD_PERIODS.items():
                         try:
                             if period_value == "mtd":
-                                period_start = end_date.replace(day=1)
+                                # Month to date - first day of current month to last trading day
+                                period_start = last_trading_day.replace(day=1)
                                 period_hist = hist[hist.index >= period_start]
                             elif period_value == "ytd":
-                                period_start = end_date.replace(month=1, day=1)
+                                # Year to date - first day of current year to last trading day
+                                period_start = last_trading_day.replace(month=1, day=1)
                                 period_hist = hist[hist.index >= period_start]
+                            elif period_value == 1:
+                                # Today - last 2 trading days
+                                period_hist = hist.tail(2)
                             else:
-                                # Use trading days
+                                # Use trading days (approximately)
                                 period_hist = hist.tail(period_value + 1)
                             
                             if len(period_hist) >= 2:
@@ -1431,8 +1479,8 @@ elif selected == "Market Dashboard":
         # Data rows
         for idx, row in df.iterrows():
             html += '<tr style="border-bottom:1px solid #404040;">'
-            html += f'<td style="padding:10px; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
-            html += f'<td style="padding:10px; color:#CCCCCC; border-right:1px solid #404040;">{row["ETF"]}</td>'
+            html += f'<td style="padding:10px; background:#2a2a2a; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
+            html += f'<td style="padding:10px; background:#2a2a2a; color:#DDDDDD; border-right:1px solid #404040;">{row["ETF"]}</td>'
             
             for period in periods:
                 return_val = row.get(period)
@@ -1478,8 +1526,8 @@ elif selected == "Market Dashboard":
             bg_color, text_color = get_color_from_return(return_val)
             
             html += '<tr style="border-bottom:1px solid #404040;">'
-            html += f'<td style="padding:10px; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
-            html += f'<td style="padding:10px; color:#CCCCCC; border-right:1px solid #404040;">{row["ETF"]}</td>'
+            html += f'<td style="padding:10px; background:#2a2a2a; color:#FFFFFF; border-right:1px solid #404040;">{row["Name"]}</td>'
+            html += f'<td style="padding:10px; background:#2a2a2a; color:#DDDDDD; border-right:1px solid #404040;">{row["ETF"]}</td>'
             html += f'<td style="padding:10px; background:{bg_color}; color:{text_color}; text-align:right; font-weight:bold;">{return_val:+.1f}%</td>'
             html += '</tr>'
         
