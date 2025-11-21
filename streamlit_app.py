@@ -252,7 +252,17 @@ def save_all_data():
         signal_queue.append(sig_copy)
     save_json(SIGNAL_QUEUE_FILE, signal_queue)
     
-    save_json(SIGNAL_HISTORY_FILE, st.session_state.signal_history)
+    # Fix: Convert datetime to string for signal_history too
+    signal_history = []
+    for sig in st.session_state.signal_history:
+        sig_copy = sig.copy()
+        if 'timestamp' in sig_copy and isinstance(sig_copy['timestamp'], datetime):
+            sig_copy['timestamp'] = sig_copy['timestamp'].isoformat()
+        if 'expiration' in sig_copy and isinstance(sig_copy['expiration'], datetime):
+            sig_copy['expiration'] = sig_copy['expiration'].isoformat()
+        signal_history.append(sig_copy)
+    save_json(SIGNAL_HISTORY_FILE, signal_history)
+    
     save_json(PERFORMANCE_FILE, st.session_state.performance)
     
     st.session_state.last_save = datetime.now()
@@ -758,7 +768,9 @@ def fetch_multi_period_performance_with_dividends(market_etfs):
         '1M': {'days': 30},
         'YTD': {'ytd': True},
         '1Y': {'days': 365},
-        '3Y': {'days': 1095}
+        '3Y': {'days': 1095},
+        '5Y': {'days': 1825},
+        '10Y': {'days': 3650}
     }
     
     results = {}
@@ -856,22 +868,27 @@ def fetch_custom_period_performance_with_dividends(market_etfs, start_date, end_
     return results
 
 def get_color_from_return(value):
-    """Return background and text color based on return value"""
+    """Return background and text color based on return value - improved readability"""
     if pd.isna(value):
-        return '#2a2a2a', '#888888'
+        return '#2a2a2a', '#CCCCCC'
     
+    # Improved color scheme with better contrast
     if value >= 10:
-        return '#006400', '#FFFFFF'
+        return '#004d00', '#FFFFFF'  # Dark green, white text
     elif value >= 5:
-        return '#228B22', '#FFFFFF'
+        return '#008000', '#FFFFFF'  # Green, white text
+    elif value >= 2:
+        return '#20B2AA', '#000000'  # Light sea green, black text
     elif value >= 0:
-        return '#90EE90', '#000000'
+        return '#98FB98', '#000000'  # Pale green, black text
+    elif value >= -2:
+        return '#FFB6C1', '#000000'  # Light pink, black text
     elif value >= -5:
-        return '#FFB6C1', '#000000'
+        return '#FF69B4', '#FFFFFF'  # Hot pink, white text
     elif value >= -10:
-        return '#DC143C', '#FFFFFF'
+        return '#DC143C', '#FFFFFF'  # Crimson, white text
     else:
-        return '#8B0000', '#FFFFFF'
+        return '#8B0000', '#FFFFFF'  # Dark red, white text
 
 # Navigation menu
 selected = option_menu(
@@ -1165,7 +1182,7 @@ elif selected == "Market Dashboard":
         """Create HTML table with navigation buttons"""
         st.subheader(title)
         
-        periods = ['1D', '5D', '1M', 'YTD', '1Y', '3Y']
+        periods = ['1D', '5D', '1M', 'YTD', '1Y', '3Y', '5Y', '10Y']
         
         html = '<table style="width:100%; border-collapse:collapse; font-family:Arial; margin-bottom:20px;">'
         
@@ -1884,28 +1901,28 @@ elif selected == "Chart Analysis":
             
             # Calculate signals
             def get_signal_color(value, bullish_threshold, bearish_threshold, reverse=False):
-                """Return color and assessment based on thresholds"""
+                """Return color and assessment based on thresholds - improved readability"""
                 if not reverse:
                     if value >= bullish_threshold:
-                        return "#00ff00", "BULLISH"
+                        return "#00AA00", "BULLISH"  # Darker green, easier to read
                     elif value <= bearish_threshold:
-                        return "#ff0000", "BEARISH"
+                        return "#CC0000", "BEARISH"  # Darker red, easier to read
                     else:
-                        return "#ffff00", "NEUTRAL"
+                        return "#FF8C00", "NEUTRAL"  # Dark orange instead of bright yellow
                 else:
                     if value <= bullish_threshold:
-                        return "#00ff00", "BULLISH"
+                        return "#00AA00", "BULLISH"
                     elif value >= bearish_threshold:
-                        return "#ff0000", "BEARISH"
+                        return "#CC0000", "BEARISH"
                     else:
-                        return "#ffff00", "NEUTRAL"
+                        return "#FF8C00", "NEUTRAL"
             
             # RSI Assessment
             rsi_color, rsi_signal = get_signal_color(rsi, 70, 30, reverse=True)
             
             # MACD Assessment
             macd_bullish = macd > macd_signal
-            macd_color = "#00ff00" if macd_bullish else "#ff0000"
+            macd_color = "#00AA00" if macd_bullish else "#CC0000"
             macd_signal_text = "BULLISH" if macd_bullish else "BEARISH"
             
             # Trend Assessment (SMA alignment)
@@ -1915,13 +1932,13 @@ elif selected == "Chart Analysis":
             
             trend_score = sum([price_above_sma20, price_above_sma50, price_above_sma200])
             if trend_score == 3:
-                trend_color, trend_signal = "#00ff00", "STRONG UPTREND"
+                trend_color, trend_signal = "#00AA00", "STRONG UPTREND"
             elif trend_score == 2:
-                trend_color, trend_signal = "#7FFF00", "UPTREND"
+                trend_color, trend_signal = "#32CD32", "UPTREND"  # Lime green
             elif trend_score == 1:
-                trend_color, trend_signal = "#ffff00", "NEUTRAL"
+                trend_color, trend_signal = "#FF8C00", "NEUTRAL"  # Dark orange
             else:
-                trend_color, trend_signal = "#ff0000", "DOWNTREND"
+                trend_color, trend_signal = "#CC0000", "DOWNTREND"
             
             # ADX Assessment (trend strength)
             adx_color, adx_signal = get_signal_color(adx, 25, 15, reverse=False)
@@ -2079,23 +2096,23 @@ elif selected == "Chart Analysis":
             # Determine recommendation
             if bullish_pct >= 70:
                 recommendation = "🟢 BUY"
-                rec_color = "#00ff00"
+                rec_color = "#00AA00"  # Darker green for readability
                 rec_text = "Strong bullish signals suggest buying opportunity"
             elif bullish_pct >= 55:
                 recommendation = "🟢 ACCUMULATE"
-                rec_color = "#7FFF00"
+                rec_color = "#32CD32"  # Lime green
                 rec_text = "Moderately bullish, consider gradual accumulation"
             elif bullish_pct >= 45:
                 recommendation = "🟡 HOLD"
-                rec_color = "#ffff00"
+                rec_color = "#FF8C00"  # Dark orange instead of bright yellow
                 rec_text = "Mixed signals, maintain current position"
             elif bullish_pct >= 30:
                 recommendation = "🟠 REDUCE"
-                rec_color = "#FFA500"
+                rec_color = "#FF4500"  # Orange red
                 rec_text = "Moderately bearish, consider reducing exposure"
             else:
                 recommendation = "🔴 SELL"
-                rec_color = "#ff0000"
+                rec_color = "#CC0000"  # Darker red for readability
                 rec_text = "Strong bearish signals suggest selling"
             
             # Display recommendation
@@ -2124,22 +2141,43 @@ elif selected == "Chart Analysis":
 elif selected == "Options Chain":
     st.header("💱 Options Chain")
     
-    ticker_choice = st.selectbox("Select Ticker", TICKERS, key="opt_ticker")
-    
     col1, col2 = st.columns(2)
     with col1:
-        dte_min = st.number_input("Min DTE", value=14, min_value=1, max_value=365)
+        ticker_choice = st.selectbox("Select Ticker", TICKERS, key="opt_ticker")
     with col2:
-        dte_max = st.number_input("Max DTE", value=45, min_value=1, max_value=365)
+        filter_mode = st.radio("DTE Filter", ["Range", "Specific"], horizontal=True)
     
-    if st.button("Load Options Chain"):
-        with st.spinner("Loading..."):
+    if filter_mode == "Range":
+        col1, col2 = st.columns(2)
+        with col1:
+            dte_min = st.number_input("Min DTE", value=14, min_value=1, max_value=365)
+        with col2:
+            dte_max = st.number_input("Max DTE", value=45, min_value=1, max_value=365)
+        dte_specific = None
+    else:
+        dte_specific = st.number_input("Specific DTE", value=30, min_value=0, max_value=365, 
+                                       help="Find options closest to this DTE")
+        dte_min = max(1, dte_specific - 7)  # +/- 7 days tolerance
+        dte_max = dte_specific + 7
+    
+    if st.button("Load Options Chain", type="primary"):
+        with st.spinner("Loading options data..."):
             options_df = get_options_chain(ticker_choice, dte_min, dte_max)
             
             if not options_df.empty:
-                st.success(f"Loaded {len(options_df)} contracts")
+                # If specific DTE requested, filter to closest match
+                if dte_specific is not None:
+                    options_df['dte_diff'] = abs(options_df['dte'] - dte_specific)
+                    closest_dte = options_df.groupby('expiration')['dte_diff'].min().idxmin()
+                    options_df = options_df[options_df['expiration'] == closest_dte]
+                    st.success(f"Loaded {len(options_df)} contracts for expiration {closest_dte} ({options_df['dte'].iloc[0]} DTE)")
+                else:
+                    st.success(f"Loaded {len(options_df)} contracts ({dte_min}-{dte_max} DTE)")
                 
-                option_type = st.radio("Type", ["Calls", "Puts", "Both"], horizontal=True)
+                # Option type filter
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    option_type = st.radio("Type", ["Calls", "Puts", "Both"], horizontal=True)
                 
                 if option_type == "Calls":
                     filtered = options_df[options_df['type'] == 'Call']
@@ -2148,13 +2186,31 @@ elif selected == "Options Chain":
                 else:
                     filtered = options_df
                 
+                # Display options
                 display_cols = ['strike', 'type', 'dte', 'expiration', 'mid', 'impliedVolatility', 
                                'volume', 'openInterest', 'delta', 'gamma', 'theta', 'vega']
                 available_cols = [col for col in display_cols if col in filtered.columns]
                 
-                st.dataframe(filtered[available_cols].sort_values('dte'), use_container_width=True)
+                # Sort by strike for better readability
+                if not filtered.empty:
+                    st.dataframe(filtered[available_cols].sort_values('strike'), use_container_width=True)
+                    
+                    # Quick stats
+                    st.subheader("Options Summary")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Contracts", len(filtered))
+                    with col2:
+                        if 'volume' in filtered.columns:
+                            st.metric("Total Volume", f"{filtered['volume'].sum():,.0f}")
+                    with col3:
+                        if 'openInterest' in filtered.columns:
+                            st.metric("Total OI", f"{filtered['openInterest'].sum():,.0f}")
+                    with col4:
+                        if 'impliedVolatility' in filtered.columns:
+                            st.metric("Avg IV", f"{filtered['impliedVolatility'].mean():.1%}")
             else:
-                st.warning("No options data available")
+                st.warning("No options data available for this ticker/DTE range")
 
 # ========================================
 # MACRO DASHBOARD
