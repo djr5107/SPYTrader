@@ -1368,41 +1368,47 @@ elif selected == "Market Dashboard":
         return results
     
     def get_color_from_return(return_val):
-        """Get graduated color based on return value"""
+        """Get graduated color based on return value with readable text colors"""
         if pd.isna(return_val):
             return '#404040', '#FFFFFF'
         
-        # More granular color grading
+        # More granular color grading with READABLE text colors
         if return_val >= 50:
-            return '#004d00', '#FFFFFF'  # Darkest green
+            return '#003300', '#FFFFFF'  # Very dark green, white text
         elif return_val >= 30:
-            return '#006600', '#FFFFFF'
+            return '#004d00', '#FFFFFF'  # Dark green, white text
         elif return_val >= 20:
-            return '#008000', '#FFFFFF'
+            return '#006600', '#FFFFFF'  # Medium-dark green, white text
         elif return_val >= 15:
-            return '#009900', '#FFFFFF'
+            return '#008000', '#FFFFFF'  # Medium green, white text
         elif return_val >= 10:
-            return '#00b300', '#FFFFFF'
+            return '#009900', '#FFFFFF'  # Medium-light green, white text
         elif return_val >= 5:
-            return '#00cc00', '#000000'
+            return '#00b300', '#FFFFFF'  # Light-medium green, white text
         elif return_val >= 2:
-            return '#00e600', '#000000'
+            return '#33cc33', '#000000'  # Lighter green, black text
         elif return_val >= 0:
-            return '#99ff99', '#000000'  # Light green
+            return '#99ff99', '#000000'  # Very light green, black text
         elif return_val >= -2:
-            return '#ffcccc', '#000000'  # Light red
+            return '#ffcccc', '#000000'  # Very light red, black text
         elif return_val >= -5:
-            return '#ff9999', '#000000'
+            return '#ff9999', '#000000'  # Light red, black text
         elif return_val >= -10:
-            return '#ff6666', '#FFFFFF'
+            return '#ff4d4d', '#000000'  # Medium-light red, black text
         elif return_val >= -15:
-            return '#ff3333', '#FFFFFF'
+            return '#ff0000', '#FFFFFF'  # Medium red, white text
         elif return_val >= -20:
-            return '#cc0000', '#FFFFFF'
+            return '#cc0000', '#FFFFFF'  # Medium-dark red, white text
         elif return_val >= -30:
-            return '#990000', '#FFFFFF'
+            return '#990000', '#FFFFFF'  # Dark red, white text
         else:
-            return '#660000', '#FFFFFF'  # Darkest red
+            return '#660000', '#FFFFFF'  # Very dark red, white text
+    
+    def annualize_return(total_return, years):
+        """Convert total return to annualized return"""
+        if years <= 0:
+            return total_return
+        return ((1 + total_return / 100) ** (1 / years) - 1) * 100
     
     def create_multi_period_table(df, title):
         """Create table showing all periods"""
@@ -1410,6 +1416,7 @@ elif selected == "Market Dashboard":
         
         # Create HTML table
         periods = ["Today", "MTD", "YTD", "1yr", "3yr", "5yr", "10yr"]
+        period_years = {"Today": 0, "MTD": 0, "YTD": 0, "1yr": 1, "3yr": 3, "5yr": 5, "10yr": 10}
         
         html = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
         
@@ -1429,12 +1436,20 @@ elif selected == "Market Dashboard":
             
             for period in periods:
                 return_val = row.get(period)
-                bg_color, text_color = get_color_from_return(return_val)
+                
+                # Annualize returns for periods > 1 year
+                years = period_years[period]
+                if years > 1 and not pd.isna(return_val):
+                    display_return = annualize_return(return_val, years)
+                else:
+                    display_return = return_val
+                
+                bg_color, text_color = get_color_from_return(display_return)
                 
                 if pd.isna(return_val):
                     display_val = "N/A"
                 else:
-                    display_val = f"{return_val:+.1f}%"
+                    display_val = f"{display_return:+.1f}%"
                 
                 html += f'<td style="padding:10px; background:{bg_color}; color:{text_color}; text-align:right; font-weight:bold; {"border-right:1px solid #404040;" if period != periods[-1] else ""}">{display_val}</td>'
             
