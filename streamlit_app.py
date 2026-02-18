@@ -1270,6 +1270,18 @@ elif selected == "Market Dashboard":
             "Dividend": "DVY",
             "Growth": "IVW",
             "High Dividend": "HDV"
+        },
+        "International Factors": {
+            "Intl Value": "IVLU",
+            "Intl Growth": "EFG",
+            "Intl Momentum": "IMTM",
+            "Intl Quality": "IQLT",
+            "Intl Low Volatility": "EFAV",
+            "Intl Dividend": "IDV",
+            "Intl High Dividend": "VYMI",
+            "Intl Small Cap": "SCZ",
+            "Intl Multi-Factor": "INTF",
+            "EAFE Value (Broad)": "EFV"
         }
     }
     
