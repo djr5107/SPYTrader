@@ -35,6 +35,95 @@ from macro_analysis_CORRECTED import (
     calculate_position_size
 )
 
+# ============================================================
+# PREMIUM SELLER ENGINE
+# Black-Scholes-Merton + volatility skew + Student-t fat-tail
+# probability, combined IV/RV edge score, EV from live mid prices.
+# ============================================================
+from scipy.stats import norm, t as student_t
+import math as _math
+
+PS_DF_BASE = 4          # Student-t degrees of freedom (fatter tails than normal)
+
+def ps_bsm_put(S, K, T, r, sigma):
+    """Black-Scholes-Merton put price."""
+    if T <= 0 or sigma <= 0:
+        return max(K - S, 0.0)
+    d1 = (_math.log(S / K) + (r + sigma * sigma / 2) * T) / (sigma * _math.sqrt(T))
+    d2 = d1 - sigma * _math.sqrt(T)
+    return K * _math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+def ps_bsm_call(S, K, T, r, sigma):
+    """Black-Scholes-Merton call price."""
+    if T <= 0 or sigma <= 0:
+        return max(S - K, 0.0)
+    d1 = (_math.log(S / K) + (r + sigma * sigma / 2) * T) / (sigma * _math.sqrt(T))
+    d2 = d1 - sigma * _math.sqrt(T)
+    return S * norm.cdf(d1) - K * _math.exp(-r * T) * norm.cdf(d2)
+
+def ps_skew_iv(K, S, atm_iv, T):
+    """Approximate a volatility skew: OTM puts carry higher IV than ATM.
+    Keeps the model from treating cheap-looking far puts as free money."""
+    denom = atm_iv * _math.sqrt(max(T, 1 / 365))
+    if denom <= 0:
+        return atm_iv
+    m = _math.log(K / S) / denom  # standardized moneyness
+    skew = (-m) * 0.045 if m < 0 else abs(m) * 0.015
+    return atm_iv * (1 + skew)
+
+def ps_pop_fattail(S, K, T, r, iv, is_put, df=PS_DF_BASE):
+    """Probability the short option expires worthless under a Student-t
+    (fat-tailed) terminal distribution. Lower than Black-Scholes by design;
+    the gap is the 'steamroller discount'."""
+    if T <= 0 or iv <= 0:
+        return 1.0 if (is_put and K < S) or (not is_put and K > S) else 0.0
+    t_scale = _math.sqrt((df - 2) / df) if df > 2 else 0.6
+    drift = (r - iv * iv / 2) * T
+    z = (_math.log(K / S) - drift) / (iv * _math.sqrt(T))
+    t_stat = z / t_scale
+    # put worthless => S_T > K => prob = 1 - F(t)
+    return float(1 - student_t.cdf(t_stat, df)) if is_put else float(student_t.cdf(t_stat, df))
+
+def ps_pop_bs(S, K, T, r, iv, is_put):
+    """Black-Scholes probability of expiring worthless (normal tails)."""
+    if T <= 0 or iv <= 0:
+        return 1.0 if (is_put and K < S) or (not is_put and K > S) else 0.0
+    d2 = (_math.log(S / K) + (r - iv * iv / 2) * T) / (iv * _math.sqrt(T))
+    return float(norm.cdf(d2)) if is_put else float(norm.cdf(-d2))
+
+def ps_event_df(event_flag):
+    """Fatten tails for known volatility events inside the window."""
+    return {"none": PS_DF_BASE, "macro": 3.0, "earn": 2.5, "both": 2.0}.get(event_flag, PS_DF_BASE)
+
+def ps_realized_vol(symbol, window=20):
+    """Annualized historical (realized) volatility from daily returns."""
+    try:
+        hist = yf.Ticker(symbol).history(period=f"{window + 10}d", interval="1d")
+        if len(hist) < window:
+            return None
+        rets = np.log(hist['Close'] / hist['Close'].shift(1)).dropna()
+        return float(rets.tail(window).std() * _math.sqrt(252))
+    except Exception:
+        return None
+
+def ps_iv_rank(symbol, current_iv_proxy):
+    """Rough IV Rank using realized-vol range as a proxy when a true IV
+    history is unavailable on free data. Returns 0-100 or None."""
+    try:
+        hist = yf.Ticker(symbol).history(period="1y", interval="1d")
+        if len(hist) < 60:
+            return None
+        rets = np.log(hist['Close'] / hist['Close'].shift(1)).dropna()
+        roll = rets.rolling(20).std() * _math.sqrt(252)
+        roll = roll.dropna()
+        lo, hi = roll.min(), roll.max()
+        if hi <= lo:
+            return None
+        return float(max(0, min(100, (current_iv_proxy - lo) / (hi - lo) * 100)))
+    except Exception:
+        return None
+
+
 st.set_page_config(page_title="SPY Pro v3.0-COMPLETE", layout="wide")
 st.title("SPY Pro v3.0 - COMPLETE 🚀")
 st.caption("✨ Full Trading System | Backtest | Live Trading | Signal History | Persistent Storage")
@@ -285,6 +374,22 @@ def is_market_open():
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
     
     return market_open <= now <= market_close
+
+@st.cache_data(ttl=300)
+def get_last_trading_day():
+    """Return the last completed trading day as a date.
+
+    Uses SPY's most recent data point from yfinance, which only contains
+    actual trading days. Automatically skips weekends and market holidays
+    with no hardcoded calendar. Returns a python date, or None on failure.
+    """
+    try:
+        hist = yf.Ticker("SPY").history(period="5d", interval="1d")
+        if hist.empty:
+            return None
+        return hist.index[-1].date()
+    except Exception:
+        return None
 
 # Fetch market data
 @st.cache_data(ttl=60)
@@ -925,8 +1030,8 @@ def get_options_chain(symbol="SPY", dte_min=7, dte_max=60):
 # Navigation menu
 selected = option_menu(
     menu_title=None,
-    options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Macro Dashboard"],
-    icons=["activity", "speedometer2", "clock-history", "graph-up-arrow", "list-ul", "trophy", "bar-chart", "currency-exchange", "globe"],
+    options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Premium Seller", "Macro Dashboard"],
+    icons=["activity", "speedometer2", "clock-history", "graph-up-arrow", "list-ul", "trophy", "bar-chart", "currency-exchange", "shield-check", "globe"],
     menu_icon="cast",
     default_index=0,
     orientation="horizontal"
@@ -1157,6 +1262,18 @@ if selected == "Trading Hub":
 elif selected == "Market Dashboard":
     st.header("📊 Market Dashboard")
     st.caption("Comprehensive market overview across asset classes, sectors, countries, and factors")
+
+    # Authoritative "Today" reference: the last completed trading day.
+    # Everything (Today, MTD, YTD) keys off this single date.
+    _ltd = get_last_trading_day()
+    if _ltd:
+        _ltd_label = _ltd.strftime("%a, %b %d, %Y")
+        _today_col_label = _ltd.strftime("%b %d")
+        st.info(f"📅 **Today** references the last completed trading day: **{_ltd_label}**. MTD and YTD are measured from this date.")
+    else:
+        _ltd_label = "unavailable"
+        _today_col_label = "Today"
+        st.warning("Could not determine the last trading day from data. Showing periods with available data.")
     
     # Control panel
     col1, col2 = st.columns([3, 1])
@@ -1314,10 +1431,17 @@ elif selected == "Market Dashboard":
                     if hist.empty or len(hist) < 2:
                         continue
 
-                    # Use the most recent date actually available in the data as the
-                    # last trading day. This automatically handles weekends, holidays,
-                    # and any year — no hardcoded calendar needed.
+                    # Authoritative reference date for MTD/YTD so every ticker
+                    # agrees on what "this month" and "this year" mean. Falls
+                    # back to this ticker's own latest date if unavailable.
+                    ref_day = get_last_trading_day()
                     last_trading_day = hist.index[-1]
+                    if ref_day is not None:
+                        anchor = pd.Timestamp(ref_day)
+                        if last_trading_day.tzinfo is not None:
+                            anchor = anchor.tz_localize(last_trading_day.tzinfo)
+                    else:
+                        anchor = last_trading_day
 
                     row_data = {'Name': name, 'ETF': ticker}
 
@@ -1326,13 +1450,12 @@ elif selected == "Market Dashboard":
                         try:
                             if period_value == "mtd":
                                 # Month to date: from the first calendar day of the
-                                # month that contains the last trading day
-                                period_start = last_trading_day.replace(day=1)
+                                # month that contains the anchor (authoritative) date
+                                period_start = anchor.replace(day=1)
                                 period_hist = hist[hist.index >= period_start]
                             elif period_value == "ytd":
-                                # Year to date: from Jan 1 of the year that contains
-                                # the last trading day
-                                period_start = last_trading_day.replace(month=1, day=1)
+                                # Year to date: from Jan 1 of the anchor year
+                                period_start = anchor.replace(month=1, day=1)
                                 period_hist = hist[hist.index >= period_start]
                             elif period_value == 1:
                                 # "Today" - last 2 trading days for day-over-day change
@@ -1442,6 +1565,9 @@ elif selected == "Market Dashboard":
         # Create HTML table
         periods = ["Today", "MTD", "YTD", "1yr", "3yr", "5yr", "10yr"]
         period_years = {"Today": 0, "MTD": 0, "YTD": 0, "1yr": 1, "3yr": 3, "5yr": 5, "10yr": 10}
+        # Display labels: show the real date for the "Today" column
+        period_labels = {p: p for p in periods}
+        period_labels["Today"] = _today_col_label
         
         html = '<table style="width:100%; border-collapse: collapse; font-size:14px;">'
         
@@ -1450,7 +1576,7 @@ elif selected == "Market Dashboard":
         html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">Name</th>'
         html += '<th style="padding:12px; text-align:left; color:#FFFFFF; border-right:1px solid #404040;">ETF</th>'
         for period in periods:
-            html += f'<th style="padding:12px; text-align:right; color:#FFFFFF; {"border-right:1px solid #404040;" if period != periods[-1] else ""}">{period}</th>'
+            html += f'<th style="padding:12px; text-align:right; color:#FFFFFF; {"border-right:1px solid #404040;" if period != periods[-1] else ""}">{period_labels[period]}</th>'
         html += '</tr>'
         
         # Data rows
@@ -2124,6 +2250,322 @@ elif selected == "Options Chain":
                 st.dataframe(filtered[available_cols].sort_values('dte'), use_container_width=True)
             else:
                 st.warning("No options data available")
+
+# ========================================
+# PREMIUM SELLER
+# ========================================
+
+elif selected == "Premium Seller":
+    st.header("🛡️ Premium Seller")
+    st.caption("Find option strikes where implied vol is rich vs realized, with high probability of expiring worthless. Ranks by edge and expected value computed from live mid prices.")
+
+    st.info(
+        "**What this targets:** not high probability alone (any far-OTM strike clears that). "
+        "It scores where you are paid the most relative to the real risk, then filters by your probability floor. "
+        "Probabilities use a fat-tail (Student-t) model, so they sit below naive Black-Scholes by design. "
+        "Decision support, not trade signals. Index options are generally permitted under your compliance policy; verify before trading."
+    )
+
+    # ---- inputs ----
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        ps_symbol = st.selectbox("Underlying", TICKERS, key="ps_symbol")
+        ps_structures = st.multiselect(
+            "Structures",
+            ["Cash-Secured Put", "Put Credit Spread", "Iron Condor", "Short Strangle"],
+            default=["Cash-Secured Put", "Put Credit Spread", "Iron Condor"],
+            help="CSP and spreads are put-side income. Condors and strangles collect on both sides. Spreads and condors cap your loss; CSP and strangle do not."
+        )
+    with c2:
+        ps_dte_min = st.number_input("Min DTE", value=1, min_value=0, max_value=120,
+            help="Days to expiration. 0-2 = daily/0DTE, 3-9 = weekly.")
+        ps_dte_max = st.number_input("Max DTE", value=9, min_value=1, max_value=120,
+            help="Upper bound of the expiration window to scan.")
+        ps_width = st.number_input("Spread width ($)", value=2.0, min_value=1.0, step=1.0,
+            help="Distance between short and long strikes for spreads and condors. Narrow widths ($1-3) reach positive EV far more easily: a $1 spread needs ~75% win rate to break even, a $5 spread needs ~94%. Wider = more credit per trade but worse expected value.")
+    with c3:
+        ps_min_pop = st.slider("Min probability of expiring worthless (%)", 70, 99, 85,
+            help="POP: your win-rate floor. Higher POP sits further OTM with thinner credit. 85% is the sweet spot where positive EV is still reachable. A 90%+ floor often returns an empty table because the math does not support it.")
+        ps_event = st.selectbox("Event in window",
+            ["none", "macro", "earn", "both"],
+            format_func=lambda x: {"none": "None known", "macro": "Macro print (CPI/NFP/FOMC)", "earn": "Earnings (single name)", "both": "Multiple events"}[x],
+            help="Flags known volatility events inside the window. Events fatten the modeled tails and lower probabilities, because realized moves are larger around them.")
+        ps_ev_filter = st.checkbox("Only show positive expected value", value=True,
+            help="Expected value = (POP × credit) − ((1−POP) × expected loss). Positive EV means the trade pays you over many repetitions. On index options this is often empty at high POP; that empty result is honest, not a bug.")
+
+    ps_rfr = st.number_input("Risk-free rate (%)", value=4.3, step=0.1,
+        help="Annual short-term rate, roughly the T-bill yield. Used in Black-Scholes pricing.") / 100
+
+    with st.expander("What the columns mean"):
+        st.markdown("""
+- **POP (fat-tail)**: probability the short option expires worthless under a Student-t distribution with fat tails. This is the honest win probability.
+- **BS POP**: Black-Scholes probability under normal tails. Usually higher than fat-tail POP. The gap is your *steamroller discount*: how much naive models overstate safety.
+- **Credit**: premium you collect, taken from live yfinance **mid** prices (midpoint of bid/ask).
+- **Max Loss**: most you can lose. Defined for spreads/condors (width − credit). Undefined (very large) for naked CSP and strangles.
+- **ROC**: return on capital = credit ÷ capital at risk. How hard your money works on the trade.
+- **EV (Expected Value)**: (POP × credit) − ((1−POP) × expected loss). The single most important number. Negative EV means the trade loses over time even if it usually wins.
+- **IV−RV**: implied vol minus realized vol, in vol points. The *vol risk premium*. Positive and wide = the market is paying you more than recent movement justifies. This is the core edge.
+- **Kelly**: the bet size fraction that maximizes long-run growth, from win probability and payoff ratio. Treat full Kelly as a ceiling; most size at one-quarter to one-half of it.
+- **Edge**: 0-100 composite score, 50% IV Rank + 50% IV−RV spread, penalized for negative EV and active events. Higher is better.
+        """)
+
+    run_ps = st.button("▶ Run Premium Seller Scan", type="primary", use_container_width=True)
+
+    if run_ps:
+        with st.spinner("Pulling live chain and running the model..."):
+            chain = get_options_chain(ps_symbol, ps_dte_min, ps_dte_max)
+
+            if chain.empty:
+                st.warning("No options chain returned for that symbol and DTE window. Try widening the DTE range, or the market data feed may be delayed.")
+            else:
+                # spot price
+                try:
+                    spot = float(yf.Ticker(ps_symbol).history(period="1d")['Close'].iloc[-1])
+                except Exception:
+                    spot = float(chain['strike'].median())
+
+                rv = ps_realized_vol(ps_symbol) or 0.0
+                # ATM IV: closest strike to spot
+                atm_row = chain.iloc[(chain['strike'] - spot).abs().argsort()[:1]]
+                atm_iv = float(atm_row['impliedVolatility'].iloc[0]) if 'impliedVolatility' in chain.columns and not atm_row.empty else 0.0
+                iv_rank = ps_iv_rank(ps_symbol, atm_iv)
+                iv_rv_spread = (atm_iv - rv) * 100  # vol points
+                df_tail = ps_event_df(ps_event)
+                has_event = ps_event != "none"
+
+                # environment metrics strip
+                m1, m2, m3, m4, m5 = st.columns(5)
+                with m1:
+                    env = "SELLER" if iv_rv_spread >= 2.5 else ("NEUTRAL" if iv_rv_spread >= -1 else "BUYER")
+                    st.metric("Environment", env, help="SELLER when IV is rich vs realized; BUYER when vol is underpriced.")
+                with m2:
+                    st.metric("IV − RV", f"{iv_rv_spread:+.1f}v", help="Vol risk premium in vol points. Positive favors selling.")
+                with m3:
+                    st.metric("ATM IV", f"{atm_iv*100:.1f}%", help="At-the-money implied volatility from the live chain.")
+                with m4:
+                    st.metric("Realized Vol", f"{rv*100:.1f}%", help="20-day annualized historical volatility.")
+                with m5:
+                    st.metric("IV Rank", f"{iv_rank:.0f}" if iv_rank is not None else "n/a",
+                        help="Where current vol sits in its 1-year range (proxy from realized vol on free data).")
+
+                # spread/IV component for edge
+                spread_comp = max(0, min(100, ((iv_rv_spread + 2) / 8) * 100))
+                ivr_comp = iv_rank if iv_rank is not None else 50.0
+
+                puts = chain[chain['type'] == 'Put'].copy()
+                calls = chain[chain['type'] == 'Call'].copy()
+
+                def live_iv(row, K, T):
+                    """Use the chain's own IV when present, else modeled skew."""
+                    v = row.get('impliedVolatility', None)
+                    if v is not None and not pd.isna(v) and v > 0:
+                        return float(v)
+                    return ps_skew_iv(K, spot, atm_iv if atm_iv > 0 else 0.15, T)
+
+                def mid_of(df_side, strike):
+                    """Live mid price for a given strike on one side."""
+                    r = df_side[df_side['strike'] == strike]
+                    if r.empty:
+                        return None
+                    m = r['mid'].iloc[0]
+                    return float(m) if (m is not None and not pd.isna(m) and m > 0) else None
+
+                rows = []
+
+                def score_and_append(rec):
+                    if rec['pop'] * 100 < ps_min_pop:
+                        return
+                    if rec['credit'] < 0.02:
+                        return
+                    edge = 0.5 * ivr_comp + 0.5 * spread_comp
+                    if rec['ev'] < 0:
+                        edge -= 18
+                    if has_event:
+                        edge -= 10
+                    if rec['defined']:
+                        edge += 4
+                    edge = max(0, min(100, edge))
+                    rec['edge'] = round(edge)
+                    rec['grade'] = 'A' if edge >= 72 else ('B' if edge >= 58 else ('C' if edge >= 45 else 'D'))
+                    rows.append(rec)
+
+                # iterate unique expirations to keep DTE consistent per structure
+                for exp in sorted(puts['expiration'].unique()):
+                    p_exp = puts[puts['expiration'] == exp].sort_values('strike')
+                    c_exp = calls[calls['expiration'] == exp].sort_values('strike')
+                    if p_exp.empty:
+                        continue
+                    dte = int(p_exp['dte'].iloc[0])
+                    T = max(dte, 0.5) / 365
+
+                    # ---- Cash-Secured Put ----
+                    if "Cash-Secured Put" in ps_structures:
+                        for _, pr in p_exp[p_exp['strike'] < spot].iterrows():
+                            K = float(pr['strike'])
+                            iv = live_iv(pr, K, T)
+                            pop = ps_pop_fattail(spot, K, T, ps_rfr, iv, True, df_tail)
+                            if pop * 100 < ps_min_pop:
+                                continue
+                            credit = mid_of(p_exp, K)
+                            if credit is None:
+                                continue
+                            bs = ps_pop_bs(spot, K, T, ps_rfr, iv, True)
+                            capital = K - credit
+                            roc = credit / capital * 100 if capital > 0 else 0
+                            el = min(K * 0.04 + credit, K * 0.5)
+                            ev = pop * credit - (1 - pop) * el
+                            ratio = credit / el if el > 0 else 0.01
+                            kelly = max(0, pop - (1 - pop) / max(ratio, 0.01))
+                            score_and_append(dict(struct="CSP", legs=f"{K:.0f}P", exp=exp, dte=dte,
+                                pop=pop, bs=bs, credit=credit, maxloss=capital, roc=roc, ev=ev,
+                                ivrv=iv_rv_spread, kelly=kelly, defined=False, undef=True))
+
+                    # ---- Put Credit Spread ----
+                    if "Put Credit Spread" in ps_structures:
+                        for _, pr in p_exp[p_exp['strike'] < spot].iterrows():
+                            K = float(pr['strike'])
+                            Klong = K - ps_width
+                            iv = live_iv(pr, K, T)
+                            pop = ps_pop_fattail(spot, K, T, ps_rfr, iv, True, df_tail)
+                            if pop * 100 < ps_min_pop:
+                                continue
+                            short_mid = mid_of(p_exp, K)
+                            long_mid = mid_of(p_exp, Klong)
+                            if short_mid is None or long_mid is None:
+                                continue
+                            credit = short_mid - long_mid
+                            if credit < 0.02:
+                                continue
+                            bs = ps_pop_bs(spot, K, T, ps_rfr, iv, True)
+                            maxloss = max(ps_width - credit, 0.01)
+                            roc = credit / maxloss * 100
+                            ev = pop * credit - (1 - pop) * maxloss
+                            kelly = max(0, pop - (1 - pop) / (credit / maxloss))
+                            score_and_append(dict(struct="Put Spread", legs=f"{K:.0f}/{Klong:.0f}P", exp=exp, dte=dte,
+                                pop=pop, bs=bs, credit=credit, maxloss=maxloss, roc=roc, ev=ev,
+                                ivrv=iv_rv_spread, kelly=kelly, defined=True, undef=False))
+
+                    # ---- Iron Condor ----
+                    if "Iron Condor" in ps_structures and not c_exp.empty:
+                        for _, pr in p_exp[p_exp['strike'] < spot].iterrows():
+                            Kp = float(pr['strike'])
+                            dist = spot - Kp
+                            Kc = spot + dist
+                            # nearest available call strike
+                            c_near = c_exp.iloc[(c_exp['strike'] - Kc).abs().argsort()[:1]]
+                            if c_near.empty:
+                                continue
+                            Kc = float(c_near['strike'].iloc[0])
+                            ivp = live_iv(pr, Kp, T)
+                            ivc = live_iv(c_near.iloc[0], Kc, T)
+                            popP = ps_pop_fattail(spot, Kp, T, ps_rfr, ivp, True, df_tail)
+                            popC = ps_pop_fattail(spot, Kc, T, ps_rfr, ivc, False, df_tail)
+                            pop = max(0, popP + popC - 1)
+                            if pop * 100 < ps_min_pop:
+                                continue
+                            KpL, KcL = Kp - ps_width, Kc + ps_width
+                            ps_short = mid_of(p_exp, Kp); ps_long = mid_of(p_exp, KpL)
+                            cs_short = mid_of(c_exp, Kc); cs_long = mid_of(c_exp, KcL)
+                            if None in (ps_short, ps_long, cs_short, cs_long):
+                                continue
+                            credit = (ps_short - ps_long) + (cs_short - cs_long)
+                            if credit < 0.02:
+                                continue
+                            bsP = ps_pop_bs(spot, Kp, T, ps_rfr, ivp, True)
+                            bsC = ps_pop_bs(spot, Kc, T, ps_rfr, ivc, False)
+                            bs = max(0, bsP + bsC - 1)
+                            maxloss = max(ps_width - credit, 0.01)
+                            roc = credit / maxloss * 100
+                            ev = pop * credit - (1 - pop) * maxloss
+                            kelly = max(0, pop - (1 - pop) / (credit / maxloss))
+                            score_and_append(dict(struct="Iron Condor", legs=f"{Kp:.0f}/{KpL:.0f}P · {Kc:.0f}/{KcL:.0f}C", exp=exp, dte=dte,
+                                pop=pop, bs=bs, credit=credit, maxloss=maxloss, roc=roc, ev=ev,
+                                ivrv=iv_rv_spread, kelly=kelly, defined=True, undef=False))
+
+                    # ---- Short Strangle ----
+                    if "Short Strangle" in ps_structures and not c_exp.empty:
+                        sig1 = (atm_iv if atm_iv > 0 else 0.15) * _math.sqrt(T) * spot
+                        for _, pr in p_exp[p_exp['strike'] < spot].iterrows():
+                            Kp = float(pr['strike'])
+                            dist = spot - Kp
+                            Kc = spot + dist
+                            c_near = c_exp.iloc[(c_exp['strike'] - Kc).abs().argsort()[:1]]
+                            if c_near.empty:
+                                continue
+                            Kc = float(c_near['strike'].iloc[0])
+                            ivp = live_iv(pr, Kp, T)
+                            ivc = live_iv(c_near.iloc[0], Kc, T)
+                            popP = ps_pop_fattail(spot, Kp, T, ps_rfr, ivp, True, df_tail)
+                            popC = ps_pop_fattail(spot, Kc, T, ps_rfr, ivc, False, df_tail)
+                            pop = max(0, popP + popC - 1)
+                            if pop * 100 < ps_min_pop:
+                                continue
+                            p_mid = mid_of(p_exp, Kp); c_mid = mid_of(c_exp, Kc)
+                            if p_mid is None or c_mid is None:
+                                continue
+                            credit = p_mid + c_mid
+                            if credit < 0.02:
+                                continue
+                            bsP = ps_pop_bs(spot, Kp, T, ps_rfr, ivp, True)
+                            bsC = ps_pop_bs(spot, Kc, T, ps_rfr, ivc, False)
+                            bs = max(0, bsP + bsC - 1)
+                            stress = 4 * sig1
+                            maxloss = max(stress - credit, credit * 8)
+                            capital = Kp * 0.20
+                            roc = credit / capital * 100 if capital > 0 else 0
+                            el = min(2 * sig1, maxloss * 0.4)
+                            ev = pop * credit - (1 - pop) * el
+                            ratio = credit / el if el > 0 else 0.01
+                            kelly = max(0, pop - (1 - pop) / max(ratio, 0.01))
+                            score_and_append(dict(struct="Strangle", legs=f"{Kp:.0f}P / {Kc:.0f}C", exp=exp, dte=dte,
+                                pop=pop, bs=bs, credit=credit, maxloss=maxloss, roc=roc, ev=ev,
+                                ivrv=iv_rv_spread, kelly=kelly, defined=False, undef=True))
+
+                # ---- assemble, filter, rank ----
+                if ps_ev_filter:
+                    rows = [r for r in rows if r['ev'] >= 0]
+
+                if not rows:
+                    if ps_ev_filter:
+                        st.warning(
+                            f"**No positive-EV candidates at {ps_min_pop}% POP.** This is the honest result, not an error. "
+                            "The vol risk premium on this underlying is too thin right now to pay for the tail risk at that probability. "
+                            "Try: lower the POP floor toward 80%, uncheck the positive-EV filter to see near-zero candidates, or wait for an elevated-vol environment (Environment = SELLER)."
+                        )
+                    else:
+                        st.warning("No candidates passed the probability and credit filters. Lower the Min POP, or the chain may be too thin at this DTE.")
+                else:
+                    rows.sort(key=lambda r: r['edge'], reverse=True)
+                    out = pd.DataFrame(rows)
+                    out['POP %'] = (out['pop'] * 100).round(1)
+                    out['BS POP %'] = (out['bs'] * 100).round(1)
+                    out['Credit $'] = out['credit'].round(2)
+                    out['Max Loss $'] = out['maxloss'].round(2)
+                    out['ROC %'] = out['roc'].round(1)
+                    out['EV $'] = out['ev'].round(3)
+                    out['IV−RV'] = out['ivrv'].round(1)
+                    out['Kelly %'] = (out['kelly'] * 100).round(1)
+                    disp = out[['struct', 'legs', 'exp', 'dte', 'POP %', 'BS POP %',
+                                'Credit $', 'Max Loss $', 'ROC %', 'EV $', 'IV−RV', 'Kelly %', 'edge', 'grade']]
+                    disp = disp.rename(columns={'struct': 'Structure', 'legs': 'Strikes',
+                                                'exp': 'Expiration', 'dte': 'DTE', 'edge': 'Edge', 'grade': 'Grade'})
+                    st.success(f"{len(rows)} candidates pass your filters. Ranked by edge.")
+                    st.dataframe(disp, use_container_width=True, hide_index=True, height=460)
+
+                    best = rows[0]
+                    st.markdown("#### Top candidate")
+                    b1, b2, b3, b4 = st.columns(4)
+                    b1.metric("Structure", best['struct'], best['legs'])
+                    b2.metric("POP (fat-tail)", f"{best['pop']*100:.1f}%", f"BS: {best['bs']*100:.1f}%")
+                    b3.metric("Credit / Max Loss", f"${best['credit']:.2f}", f"−${best['maxloss']:.2f}", delta_color="off")
+                    b4.metric("Expected Value", f"${best['ev']:.3f}", f"Edge {best['edge']} · {best['grade']}",
+                              delta_color="normal" if best['ev'] >= 0 else "inverse")
+
+                    if any(r['undef'] for r in rows):
+                        st.warning("⚠️ Rows marked CSP or Strangle carry **undefined risk**. A gap move past your strike has no floor. Size small or convert to a defined-risk spread.")
+
+                    csv = disp.to_csv(index=False)
+                    st.download_button("Download candidates (CSV)", csv, f"premium_seller_{ps_symbol}.csv", "text/csv")
 
 # ========================================
 # MACRO DASHBOARD
