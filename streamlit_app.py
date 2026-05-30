@@ -123,9 +123,56 @@ def ps_iv_rank(symbol, current_iv_proxy):
     except Exception:
         return None
 
+def ps_payoff_figure(rec, spot, width):
+    """Plotly payoff-at-expiration chart for a single candidate."""
+    struct = rec['struct']
+    credit = rec['credit']
+    mult = 100  # one contract
+    lo, hi = spot * 0.90, spot * 1.10
+    xs = np.linspace(lo, hi, 240)
+    Ks = rec.get('Kshort')   # short put strike (or short strike)
+    Kc = rec.get('Kcall')    # short call strike for two-sided structures
 
-st.set_page_config(page_title="SPY Pro v3.0-COMPLETE", layout="wide")
-st.title("SPY Pro v3.0 - COMPLETE 🚀")
+    pl = []
+    for px in xs:
+        if struct == "CSP":
+            v = (credit - max(Ks - px, 0)) * mult
+        elif struct == "Put Spread":
+            Klong = Ks - width
+            v = (credit - (max(Ks - px, 0) - max(Klong - px, 0))) * mult
+            v = max(v, -rec['maxloss'] * mult)
+        elif struct == "Iron Condor":
+            KpL, KcL = Ks - width, Kc + width
+            p_int = max(Ks - px, 0) - max(KpL - px, 0)
+            c_int = max(px - Kc, 0) - max(px - KcL, 0)
+            v = (credit - p_int - c_int) * mult
+            v = max(v, -rec['maxloss'] * mult)
+        elif struct == "Strangle":
+            v = (credit - (max(Ks - px, 0) + max(px - Kc, 0))) * mult
+        else:
+            v = credit * mult
+        pl.append(v)
+
+    pl = np.array(pl)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=xs, y=pl, mode='lines',
+                             line=dict(color='#2dd4bf', width=2.5),
+                             fill='tozeroy', fillcolor='rgba(45,212,191,0.10)'))
+    fig.add_hline(y=0, line=dict(color='#6b7785', width=1, dash='dash'))
+    fig.add_vline(x=spot, line=dict(color='#ffb03a', width=1, dash='dot'),
+                  annotation_text=f"spot {spot:.0f}", annotation_position="top")
+    fig.update_layout(
+        height=280, margin=dict(l=10, r=10, t=24, b=10),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#c9d4e0'), showlegend=False,
+        xaxis=dict(title="Underlying at expiration", gridcolor='rgba(120,130,140,0.12)'),
+        yaxis=dict(title="P/L ($)", gridcolor='rgba(120,130,140,0.12)'),
+    )
+    return fig
+
+
+st.set_page_config(page_title="DJR Trading System", layout="wide")
+st.title("DJR Trading System 🚀")
 st.caption("✨ Full Trading System | Backtest | Live Trading | Signal History | Persistent Storage")
 
 # Persistent Storage Paths
@@ -308,7 +355,7 @@ with st.sidebar:
             st.success("History cleared!")
     
     st.divider()
-    st.caption(f"SPY Pro v3.0 | {TRADING_MODE}")
+    st.caption(f"DJR Trading System | {TRADING_MODE}")
     st.caption(f"Last Save: {st.session_state.last_save.strftime('%H:%M:%S')}")
 
 # Save all data function
@@ -2333,20 +2380,8 @@ elif selected == "Premium Seller":
                 df_tail = ps_event_df(ps_event)
                 has_event = ps_event != "none"
 
-                # environment metrics strip
-                m1, m2, m3, m4, m5 = st.columns(5)
-                with m1:
-                    env = "SELLER" if iv_rv_spread >= 2.5 else ("NEUTRAL" if iv_rv_spread >= -1 else "BUYER")
-                    st.metric("Environment", env, help="SELLER when IV is rich vs realized; BUYER when vol is underpriced.")
-                with m2:
-                    st.metric("IV − RV", f"{iv_rv_spread:+.1f}v", help="Vol risk premium in vol points. Positive favors selling.")
-                with m3:
-                    st.metric("ATM IV", f"{atm_iv*100:.1f}%", help="At-the-money implied volatility from the live chain.")
-                with m4:
-                    st.metric("Realized Vol", f"{rv*100:.1f}%", help="20-day annualized historical volatility.")
-                with m5:
-                    st.metric("IV Rank", f"{iv_rank:.0f}" if iv_rank is not None else "n/a",
-                        help="Where current vol sits in its 1-year range (proxy from realized vol on free data).")
+                # environment classification (rendered persistently below, not here)
+                env = "SELLER" if iv_rv_spread >= 2.5 else ("NEUTRAL" if iv_rv_spread >= -1 else "BUYER")
 
                 # spread/IV component for edge
                 spread_comp = max(0, min(100, ((iv_rv_spread + 2) / 8) * 100))
@@ -2418,7 +2453,8 @@ elif selected == "Premium Seller":
                             kelly = max(0, pop - (1 - pop) / max(ratio, 0.01))
                             score_and_append(dict(struct="CSP", legs=f"{K:.0f}P", exp=exp, dte=dte,
                                 pop=pop, bs=bs, credit=credit, maxloss=capital, roc=roc, ev=ev,
-                                ivrv=iv_rv_spread, kelly=kelly, defined=False, undef=True))
+                                ivrv=iv_rv_spread, kelly=kelly, defined=False, undef=True,
+                                Kshort=K, Kcall=None, strike_iv=iv, el_breach=el, breakeven=K-credit))
 
                     # ---- Put Credit Spread ----
                     if "Put Credit Spread" in ps_structures:
@@ -2443,7 +2479,8 @@ elif selected == "Premium Seller":
                             kelly = max(0, pop - (1 - pop) / (credit / maxloss))
                             score_and_append(dict(struct="Put Spread", legs=f"{K:.0f}/{Klong:.0f}P", exp=exp, dte=dte,
                                 pop=pop, bs=bs, credit=credit, maxloss=maxloss, roc=roc, ev=ev,
-                                ivrv=iv_rv_spread, kelly=kelly, defined=True, undef=False))
+                                ivrv=iv_rv_spread, kelly=kelly, defined=True, undef=False,
+                                Kshort=K, Kcall=None, strike_iv=iv, el_breach=maxloss, breakeven=K-credit))
 
                     # ---- Iron Condor ----
                     if "Iron Condor" in ps_structures and not c_exp.empty:
@@ -2480,7 +2517,8 @@ elif selected == "Premium Seller":
                             kelly = max(0, pop - (1 - pop) / (credit / maxloss))
                             score_and_append(dict(struct="Iron Condor", legs=f"{Kp:.0f}/{KpL:.0f}P · {Kc:.0f}/{KcL:.0f}C", exp=exp, dte=dte,
                                 pop=pop, bs=bs, credit=credit, maxloss=maxloss, roc=roc, ev=ev,
-                                ivrv=iv_rv_spread, kelly=kelly, defined=True, undef=False))
+                                ivrv=iv_rv_spread, kelly=kelly, defined=True, undef=False,
+                                Kshort=Kp, Kcall=Kc, strike_iv=ivp, el_breach=maxloss, breakeven=None))
 
                     # ---- Short Strangle ----
                     if "Short Strangle" in ps_structures and not c_exp.empty:
@@ -2519,53 +2557,157 @@ elif selected == "Premium Seller":
                             kelly = max(0, pop - (1 - pop) / max(ratio, 0.01))
                             score_and_append(dict(struct="Strangle", legs=f"{Kp:.0f}P / {Kc:.0f}C", exp=exp, dte=dte,
                                 pop=pop, bs=bs, credit=credit, maxloss=maxloss, roc=roc, ev=ev,
-                                ivrv=iv_rv_spread, kelly=kelly, defined=False, undef=True))
+                                ivrv=iv_rv_spread, kelly=kelly, defined=False, undef=True,
+                                Kshort=Kp, Kcall=Kc, strike_iv=ivp, el_breach=el, breakeven=None))
 
-                # ---- assemble, filter, rank ----
-                if ps_ev_filter:
-                    rows = [r for r in rows if r['ev'] >= 0]
+                # ---- assemble, rank, store in session for filtering/inspection ----
+                rows.sort(key=lambda r: r['edge'], reverse=True)
+                st.session_state.ps_results = {
+                    'rows': rows,
+                    'spot': spot,
+                    'width': ps_width,
+                    'symbol': ps_symbol,
+                    'ev_filter': ps_ev_filter,
+                    'min_pop': ps_min_pop,
+                    'env': env,
+                    'iv_rv_spread': iv_rv_spread,
+                    'atm_iv': atm_iv,
+                    'rv': rv,
+                    'iv_rank': iv_rank,
+                }
 
-                if not rows:
-                    if ps_ev_filter:
-                        st.warning(
-                            f"**No positive-EV candidates at {ps_min_pop}% POP.** This is the honest result, not an error. "
-                            "The vol risk premium on this underlying is too thin right now to pay for the tail risk at that probability. "
-                            "Try: lower the POP floor toward 80%, uncheck the positive-EV filter to see near-zero candidates, or wait for an elevated-vol environment (Environment = SELLER)."
-                        )
-                    else:
-                        st.warning("No candidates passed the probability and credit filters. Lower the Min POP, or the chain may be too thin at this DTE.")
-                else:
-                    rows.sort(key=lambda r: r['edge'], reverse=True)
-                    out = pd.DataFrame(rows)
-                    out['POP %'] = (out['pop'] * 100).round(1)
-                    out['BS POP %'] = (out['bs'] * 100).round(1)
-                    out['Credit $'] = out['credit'].round(2)
-                    out['Max Loss $'] = out['maxloss'].round(2)
-                    out['ROC %'] = out['roc'].round(1)
-                    out['EV $'] = out['ev'].round(3)
-                    out['IV−RV'] = out['ivrv'].round(1)
-                    out['Kelly %'] = (out['kelly'] * 100).round(1)
-                    disp = out[['struct', 'legs', 'exp', 'dte', 'POP %', 'BS POP %',
-                                'Credit $', 'Max Loss $', 'ROC %', 'EV $', 'IV−RV', 'Kelly %', 'edge', 'grade']]
-                    disp = disp.rename(columns={'struct': 'Structure', 'legs': 'Strikes',
-                                                'exp': 'Expiration', 'dte': 'DTE', 'edge': 'Edge', 'grade': 'Grade'})
-                    st.success(f"{len(rows)} candidates pass your filters. Ranked by edge.")
-                    st.dataframe(disp, use_container_width=True, hide_index=True, height=460)
+    # ---- render from session state (runs every rerun so filters/detail persist) ----
+    res = st.session_state.get('ps_results')
+    if res:
+        all_rows = res['rows']
+        spot = res['spot']
+        width = res['width']
+        symbol = res['symbol']
 
-                    best = rows[0]
-                    st.markdown("#### Top candidate")
-                    b1, b2, b3, b4 = st.columns(4)
-                    b1.metric("Structure", best['struct'], best['legs'])
-                    b2.metric("POP (fat-tail)", f"{best['pop']*100:.1f}%", f"BS: {best['bs']*100:.1f}%")
-                    b3.metric("Credit / Max Loss", f"${best['credit']:.2f}", f"−${best['maxloss']:.2f}", delta_color="off")
-                    b4.metric("Expected Value", f"${best['ev']:.3f}", f"Edge {best['edge']} · {best['grade']}",
-                              delta_color="normal" if best['ev'] >= 0 else "inverse")
+        # environment metrics strip (persists across reruns)
+        em1, em2, em3, em4, em5 = st.columns(5)
+        em1.metric("Environment", res.get('env', '—'), help="SELLER when IV is rich vs realized; BUYER when vol is underpriced.")
+        em2.metric("IV − RV", f"{res.get('iv_rv_spread',0):+.1f}v", help="Vol risk premium in vol points. Positive favors selling.")
+        em3.metric("ATM IV", f"{res.get('atm_iv',0)*100:.1f}%", help="At-the-money implied volatility from the live chain.")
+        em4.metric("Realized Vol", f"{res.get('rv',0)*100:.1f}%", help="20-day annualized historical volatility.")
+        _ivr = res.get('iv_rank')
+        em5.metric("IV Rank", f"{_ivr:.0f}" if _ivr is not None else "n/a", help="Where current vol sits in its 1-year range (proxy on free data).")
 
-                    if any(r['undef'] for r in rows):
-                        st.warning("⚠️ Rows marked CSP or Strangle carry **undefined risk**. A gap move past your strike has no floor. Size small or convert to a defined-risk spread.")
+        # positive-EV filter applied here so toggling does not require a rescan
+        rows = [r for r in all_rows if r['ev'] >= 0] if res['ev_filter'] else list(all_rows)
 
-                    csv = disp.to_csv(index=False)
-                    st.download_button("Download candidates (CSV)", csv, f"premium_seller_{ps_symbol}.csv", "text/csv")
+        if not rows:
+            if res['ev_filter']:
+                st.warning(
+                    f"**No positive-EV candidates at {res['min_pop']}% POP.** This is the honest result, not an error. "
+                    "The vol risk premium on this underlying is too thin right now to pay for the tail risk at that probability. "
+                    "Try: lower the POP floor toward 80%, uncheck the positive-EV filter, or wait for an elevated-vol environment (Environment = SELLER)."
+                )
+            else:
+                st.warning("No candidates passed the probability and credit filters. Lower the Min POP, or the chain may be too thin at this DTE.")
+        else:
+            # ----- Edge / Grade filters -----
+            st.divider()
+            fcol1, fcol2, fcol3 = st.columns([1, 1, 2])
+            with fcol1:
+                grades_present = sorted({r['grade'] for r in rows})
+                grade_pick = st.multiselect(
+                    "Filter by grade", ["A", "B", "C", "D"],
+                    default=grades_present,
+                    help="A = rich premium and safe. B = solid. C = thin edge. D = avoid. Deselect the weak grades to hide trades that qualify but are not worth taking."
+                )
+            with fcol2:
+                max_edge = max(r['edge'] for r in rows)
+                min_edge_filter = st.slider(
+                    "Minimum edge", 0, 100, 0,
+                    help="Hide candidates below this composite edge score (0-100). Raise it to keep only the strongest setups."
+                )
+            with fcol3:
+                sort_choice = st.selectbox(
+                    "Sort by",
+                    ["Edge (high→low)", "Expected value (high→low)", "POP (high→low)", "ROC (high→low)", "Credit (high→low)"],
+                    help="Reorder the table. Edge is the overall quality score; the others isolate a single dimension."
+                )
+
+            filtered = [r for r in rows if r['grade'] in grade_pick and r['edge'] >= min_edge_filter]
+
+            sort_keys = {
+                "Edge (high→low)": 'edge',
+                "Expected value (high→low)": 'ev',
+                "POP (high→low)": 'pop',
+                "ROC (high→low)": 'roc',
+                "Credit (high→low)": 'credit',
+            }
+            filtered.sort(key=lambda r: r[sort_keys[sort_choice]], reverse=True)
+
+            if not filtered:
+                st.info("No candidates match the current grade/edge filters. Loosen them above.")
+            else:
+                # ----- table -----
+                out = pd.DataFrame(filtered)
+                out['POP %'] = (out['pop'] * 100).round(1)
+                out['BS POP %'] = (out['bs'] * 100).round(1)
+                out['Credit $'] = out['credit'].round(2)
+                out['Max Loss $'] = out['maxloss'].round(2)
+                out['ROC %'] = out['roc'].round(1)
+                out['EV $'] = out['ev'].round(3)
+                out['IV−RV'] = out['ivrv'].round(1)
+                out['Kelly %'] = (out['kelly'] * 100).round(1)
+                disp = out[['struct', 'legs', 'exp', 'dte', 'POP %', 'BS POP %',
+                            'Credit $', 'Max Loss $', 'ROC %', 'EV $', 'IV−RV', 'Kelly %', 'edge', 'grade']]
+                disp = disp.rename(columns={'struct': 'Structure', 'legs': 'Strikes',
+                                            'exp': 'Expiration', 'dte': 'DTE', 'edge': 'Edge', 'grade': 'Grade'})
+                st.success(f"Showing {len(filtered)} of {len(rows)} candidates after filters.")
+                st.dataframe(disp, use_container_width=True, hide_index=True, height=420)
+
+                if any(r['undef'] for r in filtered):
+                    st.warning("⚠️ Rows marked **CSP** or **Strangle** carry undefined risk. A gap move past your strike has no floor. Size tiny or convert to a defined-risk spread.")
+
+                csv = disp.to_csv(index=False)
+                st.download_button("Download candidates (CSV)", csv, f"premium_seller_{symbol}.csv", "text/csv")
+
+                # ----- candidate detail panel (top auto-selected, selectbox to switch) -----
+                st.divider()
+                st.subheader("🔎 Candidate detail")
+
+                labels = [f"{r['struct']} · {r['legs']} · {r['exp']} · EV ${r['ev']:.2f} · {r['grade']}" for r in filtered]
+                pick = st.selectbox(
+                    "Inspect a candidate (defaults to the top-ranked)",
+                    range(len(filtered)),
+                    format_func=lambda i: labels[i],
+                )
+                rec = filtered[pick]
+
+                dcol1, dcol2 = st.columns([1, 1])
+                with dcol1:
+                    st.markdown("**Probability**")
+                    steamroller = (rec['bs'] - rec['pop']) * 100
+                    st.markdown(
+                        f"- Fat-tail POP: **{rec['pop']*100:.2f}%**\n"
+                        f"- Black-Scholes POP: **{rec['bs']*100:.2f}%**\n"
+                        f"- Steamroller discount: **{steamroller:.2f}%**\n"
+                        f"- Strike IV: **{rec.get('strike_iv',0)*100:.1f}%**\n"
+                        f"- Prob touch (≈2×ITM): **{min(100,(1-rec['pop'])*200):.1f}%**"
+                    )
+                    st.markdown("**Risk / Reward**")
+                    be = rec.get('breakeven')
+                    be_str = f"${be:.2f}" if be is not None else "—"
+                    ml_str = f"undefined (~${rec['maxloss']*100:,.0f})" if rec['undef'] else f"${rec['maxloss']*100:,.2f}"
+                    st.markdown(
+                        f"- Credit (per contract): **${rec['credit']*100:,.2f}**\n"
+                        f"- Max loss: **{ml_str}**\n"
+                        f"- Return on capital: **{rec['roc']:.1f}%**\n"
+                        f"- Expected value: **${rec['ev']*100:,.2f}**\n"
+                        f"- Breakeven: **{be_str}**\n"
+                        f"- Kelly fraction: **{rec['kelly']*100:.1f}%** (½K: {rec['kelly']*50:.1f}%)\n"
+                        f"- Edge score: **{rec['edge']}/100 · grade {rec['grade']}**"
+                    )
+                with dcol2:
+                    st.markdown("**Payoff at expiration**")
+                    st.plotly_chart(ps_payoff_figure(rec, spot, width), use_container_width=True)
+                    if rec['undef']:
+                        st.warning("Undefined risk. A gap move past your strike has no floor. Size tiny or convert to a spread.")
+
 
 # ========================================
 # MACRO DASHBOARD
@@ -2602,4 +2744,4 @@ elif selected == "Macro Dashboard":
         st.warning("Macro data unavailable")
 
 st.divider()
-st.caption("SPY Pro v3.0 COMPLETE - Full Trading System with Persistent Storage")
+st.caption("DJR Trading System - Full Trading System with Persistent Storage")
