@@ -1060,6 +1060,10 @@ def get_options_chain(symbol="SPY", dte_min=7, dte_max=60):
                             opts['type'] = opt_type
                             opts['dte'] = dte
                             opts['expiration'] = exp_date
+                            # keep bid/ask explicitly; mid is informational only.
+                            # For selling, the executable price is the BID, not the mid.
+                            opts['bid'] = pd.to_numeric(opts['bid'], errors='coerce').fillna(0.0)
+                            opts['ask'] = pd.to_numeric(opts['ask'], errors='coerce').fillna(0.0)
                             opts['mid'] = (opts['bid'] + opts['ask']) / 2
                             all_options.append(opts)
                 except:
@@ -1074,11 +1078,315 @@ def get_options_chain(symbol="SPY", dte_min=7, dte_max=60):
     except:
         return pd.DataFrame()
 
+# ============================================================
+# AI STRATEGY DATA (embedded, from ai-strategy-toolkit-v2.html)
+# ============================================================
+
+AI_STRATEGY_INCEPTION = "2026-02-10"
+AI_STRATEGY_BENCHMARK = "^NDX"
+
+# Tier allocation guardrails (target % of portfolio)
+AI_TIER_TARGETS = {
+    "HYPER": 30, "TIER 1": 32, "TIER 2": 19, "TIER 3": 17, "CASH": 2,
+}
+
+AI_PORTFOLIO = [
+    {"ticker": "GOOGL", "name": "Alphabet", "tier": "HYPER", "score": 8.5, "target_weight": 7.0, "conviction_date": "Q1 25", "thesis": "Fastest cloud growth (48% YoY). $175-185B 2026 capex. Strongest balance sheet (D/E 0.14, ROIC 31.6%). Q4 EPS $2.82 vs $2.64 est. TPU custom silicon reduces NVDA dependency. PEG 1.84 reasonable. Risk: DOJ antitrust, search disruption narrative."},
+    {"ticker": "META", "name": "Meta Platforms", "tier": "HYPER", "score": 8.2, "target_weight": 6.0, "conviction_date": "Q1 25", "thesis": "Best PEG among hyperscalers (1.09). $201B revenue, 30% ROE, 28% ROIC. AI ad targeting driving $5B+ incremental revenue. Llama ecosystem. $57B+ 2026 capex self-funded. Risk: Reality Labs losses ($16B/yr), regulatory."},
+    {"ticker": "AMZN", "name": "Amazon", "tier": "HYPER", "score": 6.8, "target_weight": 5.0, "conviction_date": "Q1 25", "thesis": "AWS $142B run rate, 19% growth. $200B 2026 AI capex. Custom Trainium/Inferentia gaining. $691B revenue. Post-earnings selloff on capex guidance. PEG 1.65 is fair. Benchmark weight; add on pullback below $190."},
+    {"ticker": "MSFT", "name": "Microsoft", "tier": "HYPER", "score": 6.2, "target_weight": 5.0, "conviction_date": "Q1 25", "thesis": "$625B remaining obligations. Azure 31% growth (13pts AI). $305B rev, 34% ROE. Richest PEG (1.65) among hyperscalers. Cloud deceleration vs peers. Underweight vs NDX 8.1% until Copilot monetizes."},
+    {"ticker": "ORCL", "name": "Oracle", "tier": "HYPER", "score": 7.0, "target_weight": 4.0, "conviction_date": "Q2 25", "thesis": "OCI revenue surging 50%+. $130B+ remaining obligations. NVDA partnership. EPS $5.45, growing 89% YoY. High debt (D/E ~6x) is primary concern. Execution risk on rapid global DC buildout."},
+    {"ticker": "BABA", "name": "Alibaba (ADR)", "tier": "HYPER", "score": 5.5, "target_weight": 3.0, "conviction_date": "Q2 25", "thesis": "Largest non-US hyperscaler. China's #1 cloud. $10B+ AI capex ramp. 12x fwd P/E, massive discount to US peers. Risk: China regulatory/geopolitical, VIE structure, US-China decoupling."},
+    {"ticker": "NVDA", "name": "NVIDIA", "tier": "TIER 1", "score": 8.7, "target_weight": 8.0, "conviction_date": "Q1 25", "thesis": "85%+ GPU share for AI training. PEG 0.73. Blackwell demand exceeds supply into H2 2026. 73% gross margins, $45B net cash. CUDA lock-in. ER 2/25 is major catalyst. Risk: custom ASIC, China export controls, DeepSeek efficiency."},
+    {"ticker": "AVGO", "name": "Broadcom", "tier": "TIER 1", "score": 8.0, "target_weight": 5.0, "conviction_date": "Q1 25", "thesis": "Leading custom ASIC designer (Google TPU, Meta MTIA). AI revenue tripled YoY. VMware adds recurring SW revenue. 2025 return +50.6%. Strong networking portfolio. Risk: customer concentration, premium valuation."},
+    {"ticker": "TSM", "name": "TSMC (ADR)", "tier": "TIER 1", "score": 8.5, "target_weight": 4.0, "conviction_date": "Q1 25", "thesis": "Fabs every advanced AI chip (NVDA, AMD, AVGO). 60%+ gross margins on advanced nodes. Only true monopoly in AI supply chain. Arizona fab de-risks geopolitics. Risk: Taiwan/China (primary), cyclicality."},
+    {"ticker": "AMD", "name": "AMD", "tier": "TIER 1", "score": 6.5, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "#2 GPU with MI300X gaining enterprise. Best PEG in semis (0.62). DC revenue +70% YoY. Xilinx for edge AI. Underperformed NVDA in 2025. Add on MI350 evidence. Risk: NVDA dominance."},
+    {"ticker": "MU", "name": "Micron", "tier": "TIER 1", "score": 7.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "HBM3E critical bottleneck for AI training. 2026 HBM sold out. Memory pricing favorable. Cyclical history but AI creates structural shift. Risk: oversupply cycles, Samsung/SK competition."},
+    {"ticker": "ANET", "name": "Arista Networks", "tier": "TIER 1", "score": 7.5, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "DC networking leader, 157% ROIC. 800G/1.6T for AI clusters. META/MSFT top customers. ER 2/12 will update outlook. Risk: customer concentration, Cisco competitive threat."},
+    {"ticker": "DELL", "name": "Dell Technologies", "tier": "TIER 1", "score": 6.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Cheapest AI infra play at ~10x fwd P/E. $6B+ AI server pipeline. Enterprise refresh cycle. ER 2/26 critical. Risk: low-margin hardware, SMCI competition."},
+    {"ticker": "MRVL", "name": "Marvell Tech", "tier": "TIER 1", "score": 7.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Custom ASIC + networking silicon. Revenue +45% from DC segment. Electro-optics for AI clusters. Higher growth potential than AVGO but more volatile. Risk: execution, customer concentration."},
+    {"ticker": "VRT", "name": "Vertiv", "tier": "TIER 2", "score": 7.5, "target_weight": 4.0, "conviction_date": "Q1 25", "thesis": "Pure-play AI DC cooling/power. $9.5B+ backlog +30% QoQ. AI racks 3-10x more heat. 2025 return +42.8%. Expanding liquid cooling. Risk: conversion timing, Schneider/ABB competition."},
+    {"ticker": "ETN", "name": "Eaton Corp", "tier": "TIER 2", "score": 7.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "DC electrical infra (UPS, switchgear, PDUs). $13B+ backlog. 20%+ ROIC. Div aristocrat 2%+ yield. More diversified than VRT. Risk: industrial cycle, premium valuation."},
+    {"ticker": "ASML", "name": "ASML (ADR)", "tier": "TIER 2", "score": 6.5, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "EUV lithography monopoly. $35B+ backlog. Every advanced AI chip runs through ASML machines. Risk: cyclical equipment spend, China restriction reduces TAM, premium valuation."},
+    {"ticker": "APH", "name": "Amphenol", "tier": "TIER 2", "score": 6.5, "target_weight": 2.0, "conviction_date": "Q4 25", "thesis": "High-speed connectors/cables for AI racks. Every GPU cluster needs Amphenol interconnects. 25%+ ROE, 20%+ ROIC. M&A machine. Risk: diversified industrial dampens AI sensitivity."},
+    {"ticker": "AMAT", "name": "Applied Materials", "tier": "TIER 2", "score": 6.0, "target_weight": 2.0, "conviction_date": "Q2 25", "thesis": "Semi equipment leader, tools for TSMC/Samsung/Intel. AI chip demand drives fab buildout. Picks-and-shovels play. Risk: cyclical spend, China export restrictions."},
+    {"ticker": "TT", "name": "Trane Technologies", "tier": "TIER 2", "score": 6.0, "target_weight": 2.0, "conviction_date": "Q4 25", "thesis": "DC HVAC/cooling. 35% ROE, consistent compounder. AI cooling demand structural. More diversified than VRT. Risk: indirect AI exposure, premium valuation."},
+    {"ticker": "CSCO", "name": "Cisco", "tier": "TIER 2", "score": 5.5, "target_weight": 2.0, "conviction_date": "Q1 25", "thesis": "Defensive. 2.8% yield. Splunk adds AI observability. Enterprise networking refresh. Lower beta ballast. Risk: slow innovation vs Arista, legacy decline."},
+    {"ticker": "HPE", "name": "HPE", "tier": "TIER 2", "score": 5.0, "target_weight": 2.0, "conviction_date": "Q1 25", "thesis": "Deep value at ~9x fwd P/E. AI server segment growing. Juniper acquisition adds networking. Risk: low margins, execution risk, losing AI server share to DELL."},
+    {"ticker": "VST", "name": "Vistra Corp", "tier": "TIER 3", "score": 7.5, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Largest competitive US power gen (nuclear+gas+solar). ~35% off ATH, entry opportunity. AI DCs consume 1-2 GW each. Nuclear renaissance thesis. Risk: regulation, nat gas exposure."},
+    {"ticker": "CEG", "name": "Constellation Energy", "tier": "TIER 3", "score": 7.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Largest US nuclear fleet. TMI restart deal with MSFT (20-yr PPA). Clean energy premium. Nuclear capacity irreplaceable. Risk: TMI execution, regulatory timelines."},
+    {"ticker": "GEV", "name": "GE Vernova", "tier": "TIER 3", "score": 6.5, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Gas turbine orders surging for DC baseload. Grid equipment (transformers) multi-year backlogs. Only near-term bridge for AI power. Risk: turbine execution, offshore wind losses."},
+    {"ticker": "PWR", "name": "Quanta Services", "tier": "TIER 3", "score": 6.5, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Largest US electrical contractor. Builds transmission/substations. $30B+ backlog. Grid investment deferred 20 years. Risk: labor shortages, execution."},
+    {"ticker": "CCJ", "name": "Cameco", "tier": "TIER 3", "score": 6.0, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Premier uranium producer + Westinghouse JV. 10+ yrs underinvestment in fuel supply. Long-term contracts. Risk: uranium volatility, Kazakhstan competition."},
+    {"ticker": "NEE", "name": "NextEra Energy", "tier": "TIER 3", "score": 5.5, "target_weight": 2.0, "conviction_date": "Q1 25", "thesis": "Largest US utility, largest wind/solar. Low beta (0.5), portfolio ballast. 3%+ yield. Renewables PPAs with hyperscalers. Risk: rate-sensitive, slower growth vs IPPs."},
+    {"ticker": "CAT", "name": "Caterpillar", "tier": "TIER 3", "score": 5.0, "target_weight": 2.0, "conviction_date": "Q4 25", "thesis": "Backup power generators + DC construction equipment. Every DC needs 50-200MW backup from CAT. Blue-chip dividend. Risk: indirect AI exposure, global construction cyclicality."},
+    {"ticker": "FSLR", "name": "First Solar", "tier": "TIER 3", "score": 5.0, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Largest US solar manufacturer. DCs co-locating solar. IRA subsidies tailwind. Domestic mfg protects vs tariffs. Risk: IRA policy uncertainty, panel oversupply."},
+]
+
+AI_BENCH = [
+    {"ticker": "TCEHY", "name": "Tencent (ADR)", "tier": "HYPER", "score": 4.5, "note": "China #2 cloud. Gaming + social fund capex. Not owned: Lower AI visibility than BABA, ADR/VIE risk. Trigger: improved US-China relations or clear AI revenue metrics."},
+    {"ticker": "BIDU", "name": "Baidu (ADR)", "tier": "HYPER", "score": 4.0, "note": "Ernie LLM leader in China. Apollo Go autonomous. Not owned: Core search declining, limited AI monetization. Trigger: cloud revenue acceleration."},
+    {"ticker": "ARM", "name": "ARM Holdings", "tier": "TIER 1", "score": 4.5, "note": "CPU architecture for inference chips. Royalty model = high margin. Not owned: Extreme valuation (100x+ fwd P/E). Trigger: 30%+ pullback or revenue growth above 40%."},
+    {"ticker": "SMCI", "name": "Super Micro", "tier": "TIER 1", "score": 4.0, "note": "Fastest AI server assembler. Revenue +100%. Not owned: Governance (delayed 10-K, auditor switch, DOJ). Trigger: full governance resolution."},
+    {"ticker": "QCOM", "name": "Qualcomm", "tier": "TIER 1", "score": 4.5, "note": "Edge AI leader (Snapdragon). On-device inference. Not owned: Mobile cyclicality, ARM dispute. Trigger: edge AI monetization breakout."},
+    {"ticker": "INTC", "name": "Intel", "tier": "TIER 1", "score": 3.0, "note": "Foundry 18A could serve AI fab demand. Gaudi accelerators. Not owned: Execution failures, behind TSMC by 2+ nodes, burning cash. Monitor only."},
+    {"ticker": "CRWV", "name": "CoreWeave", "tier": "TIER 1", "score": 4.5, "note": "AI-native cloud, GPU-as-a-service. Not owned: Newly public (2025), unproven at scale, heavy debt, MSFT concentration. Trigger: 2-3 Qs of public financials."},
+    {"ticker": "ON", "name": "ON Semi", "tier": "TIER 1", "score": 4.0, "note": "Power semis for DCs, SiC for efficiency. Not owned: Primarily automotive. Trigger: DC power revenue reaches 15%+ of total."},
+    {"ticker": "SNPS", "name": "Synopsys", "tier": "TIER 1", "score": 4.5, "note": "EDA tools, every AI chip designed here. AI-enhanced workflows. Not owned: Indirect exposure, Ansys integration risk. Solid long-term pick-and-shovel."},
+    {"ticker": "LRCX", "name": "Lam Research", "tier": "TIER 1", "score": 4.5, "note": "Semi etch/deposition, HBM capacity buildout. Not owned: Similar thesis to AMAT. Trigger: swap for AMAT if HBM spend accelerates (Lam has higher HBM exposure)."},
+    {"ticker": "GLW", "name": "Corning", "tier": "TIER 2", "score": 4.5, "note": "Optical fiber/connectivity for AI DCs. 800G/1.6T transceivers. Not owned: Revenue mix still heavy display/telecom. Trigger: optical segment reaches 30%+ revenue."},
+    {"ticker": "KEYS", "name": "Keysight Tech", "tier": "TIER 2", "score": 4.0, "note": "Test/measurement for high-speed networking. Not owned: Cyclical order recovery underway. Trigger: order recovery confirmation."},
+    {"ticker": "TEL", "name": "TE Connectivity", "tier": "TIER 2", "score": 4.0, "note": "DC connectors/sensors, competes with APH. Not owned: Prefer APH for higher AI concentration. Trigger: swap if APH valuation stretches."},
+    {"ticker": "SNDR", "name": "Schneider (ADR)", "tier": "TIER 2", "score": 4.0, "note": "Global DC power/cooling. Competes with VRT/ETN. Not owned: ADR liquidity concerns. Trigger: European DC buildout acceleration."},
+    {"ticker": "NXPI", "name": "NXP Semi", "tier": "TIER 2", "score": 3.5, "note": "Automotive AI semis (ADAS). Not owned: Slower adoption curve than DC. Trigger: autonomous driving investment acceleration."},
+    {"ticker": "JBL", "name": "Jabil", "tier": "TIER 2", "score": 3.5, "note": "AI server rack contract mfg. Not owned: Low margin, limited pricing power. Trigger: deep value basis only."},
+    {"ticker": "NRG", "name": "NRG Energy", "tier": "TIER 3", "score": 4.5, "note": "Power gen + retail electricity. DC PPA pipeline growing. Not owned: Higher leverage than VST/CEG. Trigger: pullback below $80 or PPA acceleration."},
+    {"ticker": "DLR", "name": "Digital Realty", "tier": "TIER 3", "score": 4.5, "note": "Largest DC REIT. Long-term hyperscaler leases. 3%+ yield. Not owned: REIT limits capital appreciation in growth strategy. Trigger: rate-sensitive environment needing defensive yield."},
+    {"ticker": "EQIX", "name": "Equinix", "tier": "TIER 3", "score": 4.5, "note": "Global DC colocation REIT. AI increasing density/pricing. Not owned: Same REIT concern, premium valuation. Consider for DC operator exposure."},
+    {"ticker": "SO", "name": "Southern Company", "tier": "TIER 3", "score": 4.0, "note": "Regulated utility, SE US (prime DC location). Vogtle nuclear. 3.5%+ yield. Not owned: Regulated growth too slow. Trigger: need lower beta."},
+    {"ticker": "EMR", "name": "Emerson Electric", "tier": "TIER 3", "score": 4.5, "note": "Industrial automation + DC mgmt SW (AspenTech). Not owned: AI indirect, transformation underway. Trigger: DC mgmt revenue becomes material."},
+    {"ticker": "AES", "name": "AES Corp", "tier": "TIER 3", "score": 4.0, "note": "Renewable developer, battery storage. Not owned: High debt, EM exposure. Trigger: deleveraging + DC PPA wins."},
+    {"ticker": "SMR", "name": "NuScale Power", "tier": "TIER 3", "score": 3.0, "note": "Small modular reactor tech. Long-term AI power solution. Not owned: Pre-revenue, speculative. Trigger: SMR regulatory progress only."},
+    {"ticker": "PRIM", "name": "Primoris Services", "tier": "TIER 3", "score": 4.0, "note": "Infrastructure contractor, growing DC backlog. Not owned: Prefer PWR. Trigger: specific DC contract wins or PWR overvalued."},
+    {"ticker": "UNP", "name": "Union Pacific", "tier": "TIER 3", "score": 3.0, "note": "Transports materials for DC buildout. Not owned: Too indirect. Extreme second-derivative play only."},
+]
+
+AI_MANDATE_MD = r"""## Investment Policy Statement & Mandate
+
+# Investment Policy Statement & Mandate
+
+AI Infrastructure Equity Strategy, v2.0 | February 6, 2026
+
+## Strategy Overview
+
+| Strategy Name | AI Infrastructure Equity Strategy |
+|---|---|
+| Objective | Long-term capital appreciation by investing across the full AI infrastructure supply chain |
+| Style | Thematic / Tactical Growth |
+| Primary Benchmark | Nasdaq-100 Index (NDX) |
+| Reference Benchmark | Indxx Artificial Intelligence & Big Data Index |
+| Universe | US-listed equities (including ADRs) across the AI infrastructure ecosystem |
+| Holdings | 30-50 positions |
+| SMA Minimum | $100,000 ($250K+ recommended) |
+| SMA Manager Fee | 0.55% under $250K | 0.50% $250K-$1M | 0.40% $1M+ | 0.35% $5M+ |
+| ETF Expense Ratio | 0.65% |
+| Inception | February 10, 2026 |
+
+## Investment Universe: Tier Definitions
+
+| Tier | Definition | Examples |
+|---|---|---|
+| Hyperscalers | Companies making direct AI infrastructure capex investments at scale | Alphabet, Meta, Oracle |
+| Tier 1: Direct | Companies receiving direct revenue from hyperscaler AI capex (GPUs, custom silicon, servers, networking, memory) | NVIDIA, Broadcom, TSMC |
+| Tier 2: Secondary | Broader DC infrastructure supply chain (power mgmt, thermal, connectors, semi equipment) | Vertiv, Eaton, ASML |
+| Tier 3: Tertiary | Downstream effects (power generation, utilities, grid construction, fuel supply) | Vistra, Constellation Energy, Quanta Services |
+
+## Tier Allocation Guardrails
+
+| Tier | Minimum | Target | Maximum |
+|---|---|---|---|
+| Hyperscalers | 10% | 25% | 45% |
+| Tier 1: Direct | 10% | 25% | 45% |
+| Tier 2: Secondary | 10% | 25% | 45% |
+| Tier 3: Tertiary | 10% | 25% | 45% |
+| Cash | 0% | 0-2% | 5% |
+
+Equal 25% targets across all four tiers provide maximum tactical flexibility. A PM who becomes more constructive on power/grid (Tier 3) over semiconductors (Tier 1) can rotate up to 45% into Tier 3 while maintaining 10% minimum in Tier 1. Max allocations are soft guidelines that can be exceeded with documented rationale and IC awareness. Minimum allocations are hard constraints.
+
+## Position Sizing Rules
+
+| Parameter | Constraint | Rationale |
+|---|---|---|
+| Max Individual (at cost) | 10% | Prevents single-stock concentration |
+| Max Drift Before Rebalance | 12.5% at market value | 2.5% drift tolerance, forces trimming above cap |
+| Min Individual (at cost) | 2% | Meaningful contribution; no "toe-in-the-water" positions |
+| Max vs. NDX Weight | 1.5x NDX weight | Applies only to NDX constituents; non-NDX names use 10% absolute cap |
+| Holdings Count | 30-50 | Diversification with conviction weighting |
+| Sizing Driver | Conviction Score | Scores 8-10 → 5-10%; 6-7 → 3-5%; 5-6 → 2-3% |
+
+## Turnover & Trading
+
+| Annual Turnover Target | 50-80% |
+|---|---|
+| Annual Turnover Cap | 120% (above requires CIO approval) |
+| Rebalancing | Quarterly (Mar, Jun, Sep, Dec) + event-driven |
+| Tax-Loss Harvesting (SMA) | Active, ongoing, 30-day wash sale compliance |
+| New Position Entry | Minimum 2% initial allocation |
+| Position Exit | Full exit or reduce to 2% min; no orphan positions |
+
+## Risk Parameters
+
+| Metric | Target/Limit | Monitoring |
+|---|---|---|
+| Tracking Error vs. NDX | 3-8% annualized | Monthly |
+| Beta vs. NDX | 0.85-1.15 | Monthly |
+| Max Drawdown Flag | Flag if exceeds benchmark by 500+ bps | Daily |
+| Max GICS Technology | 70% | Quarterly |
+| Liquidity Floor | $10M+ avg daily volume | At entry |
+
+## Governance
+
+IC Review: Quarterly portfolio review covering positioning, attribution, risk metrics, tier allocations, conviction score updates. Annual mandate review.
+
+Breach Protocol: Hard constraint breach → 5 business days to remediate. Market-driven drift → 10 business days. All trades require brief rationale in trading journal."""
+
+AI_CONVICTION_MD = r"""## Conviction Scoring Framework
+
+# Conviction Scoring Framework
+
+Systematic approach to position sizing that drives portfolio weights and explains benchmark deviations
+
+## Framework Overview
+
+Every holding and watch list name receives a Conviction Score on a 1-10 scale. This score directly drives target portfolio weight and provides documented rationale for overweight/underweight positions vs. benchmark. Updated quarterly or event-driven for material changes (earnings, M&A, regulation).
+
+## Scoring Components
+
+| Component | Weight | What It Measures |
+|---|---|---|
+| 1. Fundamental Strength | 35% | Valuation (P/E, PEG, EV/EBITDA vs. growth), balance sheet quality, profitability (ROIC, ROE, margins), FCF generation |
+| 2. Competitive Positioning | 30% | Market share in AI supply chain role, barriers to entry, technology moat (patents, architecture lock-in), pricing power |
+| 3. AI Revenue Visibility | 20% | % of revenue tied to AI capex, order backlog size/duration, customer concentration, forward booking clarity |
+| 4. Tier Outlook | 15% | Forward 12-month outlook for company's tier/sub-segment. Captures regime preferences (e.g., favoring energy over hyperscalers). Current ranking: Tier 1 > Tier 3 > Tier 2 > Hyperscalers, reflecting near-term caution on the pace and ROI of hyperscaler capex commitments |
+
+## Score-to-Weight Mapping
+
+| Score | Level | Target Weight | Interpretation |
+|---|---|---|---|
+| 9-10 | Maximum Conviction | 7-10% | Core position. Best risk/reward. Overweight vs. benchmark. |
+| 7-8 | High Conviction | 4-6% | Strong position. Favorable fundamentals + outlook. Likely overweight. |
+| 5-6 | Moderate Conviction | 2-4% | Solid thematic exposure but some concerns. Benchmark-ish weight. |
+| 3-4 | Watch List | 0% | Interesting but not investable today. Needs catalyst or better entry. |
+| 1-2 | Avoid | N/A | Fundamental or structural concerns. Remove from watch list. |
+
+## Scoring Example: NVDA
+
+| Fundamental Strength (35%) | 8/10 | PEG 0.73 (cheapest large-cap semi), 73% gross margins, $45B net cash. P/E optically rich at 43x though growth justifies it. |
+|---|---|---|
+| Competitive Positioning (30%) | 9/10 | 85%+ GPU market share for AI training. CUDA lock-in. Custom ASIC competition real but not displacing GPUs yet. |
+| AI Revenue Visibility (20%) | 10/10 | 95%+ data center revenue is AI. Blackwell demand exceeds supply into H2 2026. Every hyperscaler is a customer. |
+| Tier Outlook (15%) | 8/10 | Tier 1 ranked highest in current outlook. Direct beneficiaries of sustained capex regardless of hyperscaler ROI debates. |
+| Weighted Score | 8.7 | → Maximum Conviction → Target Weight: 8% |
+
+## Using Scores to Explain Benchmark Deviations
+
+Every overweight/underweight traces to the conviction score. Example client language:"""
+
+
+# ============================================================
+# AI STRATEGY HELPERS: persistence + model-portfolio performance
+# ============================================================
+import json as _json
+import os as _os
+
+AI_PORTFOLIO_FILE = "ai_portfolio_state.json"
+
+def ai_load_portfolio():
+    """Load the working portfolio. Starts from the embedded default and
+    overlays any saved edits. Saved edits survive reruns and app sleeps."""
+    if _os.path.exists(AI_PORTFOLIO_FILE):
+        try:
+            with open(AI_PORTFOLIO_FILE) as f:
+                saved = _json.load(f)
+            if isinstance(saved, list) and saved:
+                return saved
+        except Exception:
+            pass
+    # deep copy of embedded default
+    return [dict(h) for h in AI_PORTFOLIO]
+
+def ai_save_portfolio(holdings):
+    """Persist the working portfolio to disk."""
+    try:
+        with open(AI_PORTFOLIO_FILE, "w") as f:
+            _json.dump(holdings, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Could not save: {e}")
+        return False
+
+def ai_reset_portfolio():
+    """Delete saved edits and revert to the embedded default."""
+    try:
+        if _os.path.exists(AI_PORTFOLIO_FILE):
+            _os.remove(AI_PORTFOLIO_FILE)
+        return True
+    except Exception:
+        return False
+
+@st.cache_data(ttl=900)
+def ai_fetch_prices(tickers, inception):
+    """Fetch current price and inception-date price for each ticker.
+    Model performance = target-weighted price change since inception.
+    Returns dict: ticker -> {price_now, price_incept, ret_pct} (None on failure)."""
+    out = {}
+    if not tickers:
+        return out
+    try:
+        # batch download from a few days before inception through today
+        start = (pd.Timestamp(inception) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+        data = yf.download(list(tickers), start=start, progress=False, auto_adjust=True)
+        # handle single vs multi ticker shape
+        if isinstance(data.columns, pd.MultiIndex):
+            close = data['Close']
+        else:
+            close = data[['Close']] if 'Close' in data else data
+            if len(tickers) == 1:
+                close.columns = list(tickers)
+        incept_ts = pd.Timestamp(inception)
+        for t in tickers:
+            try:
+                series = close[t].dropna() if t in close.columns else pd.Series(dtype=float)
+                if series.empty:
+                    out[t] = {"price_now": None, "price_incept": None, "ret_pct": None}
+                    continue
+                # inception price = first available on/after inception date
+                on_or_after = series[series.index >= incept_ts]
+                p0 = float(on_or_after.iloc[0]) if not on_or_after.empty else float(series.iloc[0])
+                p1 = float(series.iloc[-1])
+                ret = (p1 / p0 - 1) * 100 if p0 > 0 else None
+                out[t] = {"price_now": p1, "price_incept": p0, "ret_pct": ret}
+            except Exception:
+                out[t] = {"price_now": None, "price_incept": None, "ret_pct": None}
+    except Exception:
+        for t in tickers:
+            out[t] = {"price_now": None, "price_incept": None, "ret_pct": None}
+    return out
+
+def ai_compute_performance(holdings, inception, benchmark="^NDX"):
+    """Model-portfolio return: sum(target_weight_i * stock_return_i), normalized
+    by the total invested weight. Returns (strategy_ret, bench_ret, per_holding)."""
+    tickers = [h['ticker'] for h in holdings if h.get('ticker')]
+    prices = ai_fetch_prices(tuple(tickers), inception)
+    bench_prices = ai_fetch_prices((benchmark,), inception)
+    bench_ret = bench_prices.get(benchmark, {}).get('ret_pct')
+
+    per = []
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for h in holdings:
+        t = h['ticker']
+        w = h.get('target_weight') or 0.0
+        pr = prices.get(t, {})
+        ret = pr.get('ret_pct')
+        contrib = None
+        if ret is not None and w:
+            contrib = (w / 100.0) * ret
+            weighted_sum += contrib
+            weight_total += w / 100.0
+        per.append({**h, "price_now": pr.get('price_now'),
+                    "price_incept": pr.get('price_incept'),
+                    "ret_pct": ret, "contribution": contrib})
+    strategy_ret = (weighted_sum / weight_total) if weight_total > 0 else None
+    return strategy_ret, bench_ret, per
+
+
+
 # Navigation menu
 selected = option_menu(
     menu_title=None,
-    options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Premium Seller", "Macro Dashboard"],
-    icons=["activity", "speedometer2", "clock-history", "graph-up-arrow", "list-ul", "trophy", "bar-chart", "currency-exchange", "shield-check", "globe"],
+    options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Premium Seller", "AI Strategy", "Macro Dashboard"],
+    icons=["activity", "speedometer2", "clock-history", "graph-up-arrow", "list-ul", "trophy", "bar-chart", "currency-exchange", "shield-check", "cpu", "globe"],
     menu_icon="cast",
     default_index=0,
     orientation="horizontal"
@@ -2277,26 +2585,38 @@ elif selected == "Options Chain":
     if st.button("Load Options Chain"):
         with st.spinner("Loading..."):
             options_df = get_options_chain(ticker_choice, dte_min, dte_max)
-            
             if not options_df.empty:
-                st.success(f"Loaded {len(options_df)} contracts")
-                
-                option_type = st.radio("Type", ["Calls", "Puts", "Both"], horizontal=True)
-                
-                if option_type == "Calls":
-                    filtered = options_df[options_df['type'] == 'Call']
-                elif option_type == "Puts":
-                    filtered = options_df[options_df['type'] == 'Put']
-                else:
-                    filtered = options_df
-                
-                display_cols = ['strike', 'type', 'dte', 'expiration', 'mid', 'impliedVolatility', 
-                               'volume', 'openInterest', 'delta', 'gamma', 'theta', 'vega']
-                available_cols = [col for col in display_cols if col in filtered.columns]
-                
-                st.dataframe(filtered[available_cols].sort_values('dte'), use_container_width=True)
+                st.session_state.opt_chain_df = options_df
+                st.session_state.opt_chain_ticker = ticker_choice
             else:
+                st.session_state.opt_chain_df = None
                 st.warning("No options data available")
+
+    # Render from session state so the Calls/Puts/Both radio works without a rescan
+    chain_df = st.session_state.get('opt_chain_df')
+    if chain_df is not None and not chain_df.empty:
+        st.success(f"Loaded {len(chain_df)} contracts for {st.session_state.get('opt_chain_ticker', ticker_choice)}")
+
+        option_type = st.radio("Type", ["Calls", "Puts", "Both"], horizontal=True, key="opt_type_radio")
+
+        if option_type == "Calls":
+            filtered = chain_df[chain_df['type'] == 'Call']
+        elif option_type == "Puts":
+            filtered = chain_df[chain_df['type'] == 'Put']
+        else:
+            filtered = chain_df
+
+        # show bid and ask explicitly (mid alone hides untradeable strikes)
+        display_cols = ['strike', 'type', 'dte', 'expiration', 'bid', 'ask', 'mid',
+                        'lastPrice', 'impliedVolatility', 'volume', 'openInterest']
+        available_cols = [col for col in display_cols if col in filtered.columns]
+
+        if filtered.empty:
+            st.info(f"No {option_type.lower()} found in this DTE window.")
+        else:
+            st.dataframe(filtered[available_cols].sort_values(['dte', 'strike']),
+                         use_container_width=True, hide_index=True)
+            st.caption("When selling, you collect the **bid**, not the mid. Strikes showing bid = 0 cannot be sold at any positive price.")
 
 # ========================================
 # PREMIUM SELLER
@@ -2347,7 +2667,7 @@ elif selected == "Premium Seller":
         st.markdown("""
 - **POP (fat-tail)**: probability the short option expires worthless under a Student-t distribution with fat tails. This is the honest win probability.
 - **BS POP**: Black-Scholes probability under normal tails. Usually higher than fat-tail POP. The gap is your *steamroller discount*: how much naive models overstate safety.
-- **Credit**: premium you collect, taken from live yfinance **mid** prices (midpoint of bid/ask).
+- **Credit**: premium you actually collect, priced at the live **bid** (what a buyer will pay you now). Spreads net the short bid minus the long ask. Strikes with no bid are rejected as untradeable. This avoids phantom mid-price trades.
 - **Max Loss**: most you can lose. Defined for spreads/condors (width − credit). Undefined (very large) for naked CSP and strangles.
 - **ROC**: return on capital = credit ÷ capital at risk. How hard your money works on the trade.
 - **EV (Expected Value)**: (POP × credit) − ((1−POP) × expected loss). The single most important number. Negative EV means the trade loses over time even if it usually wins.
@@ -2397,13 +2717,40 @@ elif selected == "Premium Seller":
                         return float(v)
                     return ps_skew_iv(K, spot, atm_iv if atm_iv > 0 else 0.15, T)
 
-                def mid_of(df_side, strike):
-                    """Live mid price for a given strike on one side."""
+                def _row_for(df_side, strike):
                     r = df_side[df_side['strike'] == strike]
-                    if r.empty:
+                    return None if r.empty else r.iloc[0]
+
+                def sell_price(df_side, strike):
+                    """Price you actually COLLECT when selling this strike = the bid.
+                    Returns None if there is no real bid (untradeable) or the
+                    bid/ask is implausible. This is the fix for phantom mid prices."""
+                    r = _row_for(df_side, strike)
+                    if r is None:
                         return None
-                    m = r['mid'].iloc[0]
-                    return float(m) if (m is not None and not pd.isna(m) and m > 0) else None
+                    bid = float(r['bid']) if not pd.isna(r['bid']) else 0.0
+                    ask = float(r['ask']) if not pd.isna(r['ask']) else 0.0
+                    # no bid => nobody will buy it from you => not tradeable
+                    if bid <= 0:
+                        return None
+                    # reject absurd spreads (bid/ask wider than the ask itself is illiquid garbage)
+                    if ask > 0 and (ask - bid) / ask > 0.80 and ask > 0.10:
+                        return None
+                    return bid
+
+                def buy_price(df_side, strike):
+                    """Price you PAY to buy the long (protective) leg = the ask.
+                    For the long leg, missing ask means we cannot price the spread."""
+                    r = _row_for(df_side, strike)
+                    if r is None:
+                        return None
+                    ask = float(r['ask']) if not pd.isna(r['ask']) else 0.0
+                    if ask <= 0:
+                        # if there is no ask, treat the long leg as free (best case for us)
+                        # but only if a bid exists to confirm the strike trades at all
+                        bid = float(r['bid']) if not pd.isna(r['bid']) else 0.0
+                        return 0.0 if bid >= 0 else None
+                    return ask
 
                 rows = []
 
@@ -2441,7 +2788,7 @@ elif selected == "Premium Seller":
                             pop = ps_pop_fattail(spot, K, T, ps_rfr, iv, True, df_tail)
                             if pop * 100 < ps_min_pop:
                                 continue
-                            credit = mid_of(p_exp, K)
+                            credit = sell_price(p_exp, K)
                             if credit is None:
                                 continue
                             bs = ps_pop_bs(spot, K, T, ps_rfr, iv, True)
@@ -2465,8 +2812,8 @@ elif selected == "Premium Seller":
                             pop = ps_pop_fattail(spot, K, T, ps_rfr, iv, True, df_tail)
                             if pop * 100 < ps_min_pop:
                                 continue
-                            short_mid = mid_of(p_exp, K)
-                            long_mid = mid_of(p_exp, Klong)
+                            short_mid = sell_price(p_exp, K)
+                            long_mid = buy_price(p_exp, Klong)
                             if short_mid is None or long_mid is None:
                                 continue
                             credit = short_mid - long_mid
@@ -2501,8 +2848,8 @@ elif selected == "Premium Seller":
                             if pop * 100 < ps_min_pop:
                                 continue
                             KpL, KcL = Kp - ps_width, Kc + ps_width
-                            ps_short = mid_of(p_exp, Kp); ps_long = mid_of(p_exp, KpL)
-                            cs_short = mid_of(c_exp, Kc); cs_long = mid_of(c_exp, KcL)
+                            ps_short = sell_price(p_exp, Kp); ps_long = buy_price(p_exp, KpL)
+                            cs_short = sell_price(c_exp, Kc); cs_long = buy_price(c_exp, KcL)
                             if None in (ps_short, ps_long, cs_short, cs_long):
                                 continue
                             credit = (ps_short - ps_long) + (cs_short - cs_long)
@@ -2538,7 +2885,7 @@ elif selected == "Premium Seller":
                             pop = max(0, popP + popC - 1)
                             if pop * 100 < ps_min_pop:
                                 continue
-                            p_mid = mid_of(p_exp, Kp); c_mid = mid_of(c_exp, Kc)
+                            p_mid = sell_price(p_exp, Kp); c_mid = sell_price(c_exp, Kc)
                             if p_mid is None or c_mid is None:
                                 continue
                             credit = p_mid + c_mid
@@ -2707,6 +3054,209 @@ elif selected == "Premium Seller":
                     st.plotly_chart(ps_payoff_figure(rec, spot, width), use_container_width=True)
                     if rec['undef']:
                         st.warning("Undefined risk. A gap move past your strike has no floor. Size tiny or convert to a spread.")
+
+
+# ========================================
+# AI STRATEGY
+# ========================================
+
+elif selected == "AI Strategy":
+    st.header("🤖 AI Infrastructure Equity Strategy")
+    st.caption("Live tracking for the AI infrastructure portfolio. Inception 2026-02-10. Benchmark: Nasdaq-100 (NDX).")
+
+    ai_tabs = st.tabs(["📊 Portfolio", "📈 Performance", "✏️ Manage", "👁️ Bench", "📜 Mandate", "🎯 Conviction"])
+
+    # ---------------- PORTFOLIO ----------------
+    with ai_tabs[0]:
+        holdings = ai_load_portfolio()
+        st.subheader("Model Portfolio: Live Holdings")
+        with st.spinner("Fetching live prices..."):
+            strat_ret, bench_ret, per = ai_compute_performance(holdings, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK)
+
+        # headline metrics
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("Holdings", f"{len(holdings)}")
+        tw = sum(h.get('target_weight') or 0 for h in holdings)
+        mc2.metric("Invested Weight", f"{tw:.0f}%", help="Sum of target weights. Remainder is cash.")
+        mc3.metric("Strategy (since inception)", f"{strat_ret:+.1f}%" if strat_ret is not None else "n/a",
+                   help="Target-weighted price change of holdings since 2026-02-10.")
+        delta_v = (strat_ret - bench_ret) if (strat_ret is not None and bench_ret is not None) else None
+        mc4.metric("NDX (benchmark)", f"{bench_ret:+.1f}%" if bench_ret is not None else "n/a",
+                   f"{delta_v:+.1f}% active" if delta_v is not None else None)
+
+        # tier allocation summary
+        st.markdown("##### Tier Allocation vs. Target")
+        tier_now = {}
+        for h in holdings:
+            tier_now[h['tier']] = tier_now.get(h['tier'], 0) + (h.get('target_weight') or 0)
+        tcols = st.columns(len(AI_TIER_TARGETS))
+        for i, (tier, target) in enumerate(AI_TIER_TARGETS.items()):
+            cur = tier_now.get(tier, 0)
+            if tier == "CASH":
+                cur = max(0, 100 - tw)
+            tcols[i].metric(tier.title(), f"{cur:.0f}%", f"target {target}%", delta_color="off")
+
+        # holdings table, tier-grouped
+        st.markdown("##### Holdings")
+        df = pd.DataFrame(per)
+        if not df.empty:
+            df['Price'] = df['price_now'].apply(lambda x: f"${x:,.2f}" if x is not None else "n/a")
+            df['Since Incept'] = df['ret_pct'].apply(lambda x: f"{x:+.1f}%" if x is not None else "n/a")
+            df['Contribution'] = df['contribution'].apply(lambda x: f"{x:+.2f}%" if x is not None else "n/a")
+            df['Weight'] = df['target_weight'].apply(lambda x: f"{x:.0f}%" if x is not None else "")
+            df['Score'] = df['score'].apply(lambda x: f"{x:.1f}" if x is not None else "")
+            tier_order = ["HYPER", "TIER 1", "TIER 2", "TIER 3"]
+            df['_ord'] = df['tier'].apply(lambda t: tier_order.index(t) if t in tier_order else 99)
+            df = df.sort_values(['_ord', 'target_weight'], ascending=[True, False])
+            show = df[['tier', 'ticker', 'name', 'Score', 'Weight', 'Price', 'Since Incept', 'Contribution']]
+            show = show.rename(columns={'tier': 'Tier', 'ticker': 'Ticker', 'name': 'Name'})
+            st.dataframe(show, use_container_width=True, hide_index=True, height=560)
+            st.caption("Since Incept = each name's price change since 2026-02-10. Contribution = target weight × that return.")
+
+            # per-holding thesis expander
+            with st.expander("📝 View conviction thesis per holding"):
+                pick = st.selectbox("Holding", [h['ticker'] for h in holdings], key="ai_thesis_pick")
+                rec = next((h for h in holdings if h['ticker'] == pick), None)
+                if rec:
+                    st.markdown(f"**{rec['ticker']} — {rec['name']}** · {rec['tier']} · Score {rec.get('score','?')} · Target {rec.get('target_weight','?')}%")
+                    st.write(rec.get('thesis', 'No thesis recorded.'))
+        else:
+            st.warning("No holdings to display.")
+
+    # ---------------- PERFORMANCE ----------------
+    with ai_tabs[1]:
+        holdings = ai_load_portfolio()
+        st.subheader("Performance Since Inception (2026-02-10)")
+        with st.spinner("Computing performance..."):
+            strat_ret, bench_ret, per = ai_compute_performance(holdings, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK)
+
+        pc1, pc2, pc3 = st.columns(3)
+        pc1.metric("Strategy (Model)", f"{strat_ret:+.2f}%" if strat_ret is not None else "n/a")
+        pc2.metric("Nasdaq-100", f"{bench_ret:+.2f}%" if bench_ret is not None else "n/a")
+        active = (strat_ret - bench_ret) if (strat_ret is not None and bench_ret is not None) else None
+        pc3.metric("Active Return", f"{active:+.2f}%" if active is not None else "n/a",
+                   help="Strategy minus benchmark. Positive = outperforming NDX.")
+
+        st.info("This is **model** performance: target weights × each holding's actual price change since inception. "
+                "It reflects how the strategy's allocation has performed, not your exact brokerage P&L (which would need your real share counts and fills).")
+
+        # contribution chart
+        dfp = pd.DataFrame([p for p in per if p.get('contribution') is not None])
+        if not dfp.empty:
+            dfp = dfp.sort_values('contribution', ascending=False)
+            st.markdown("##### Contribution to Return by Holding")
+            fig = go.Figure()
+            colors = ['#27763d' if c >= 0 else '#9b2226' for c in dfp['contribution']]
+            fig.add_trace(go.Bar(x=dfp['ticker'], y=dfp['contribution'], marker_color=colors))
+            fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10),
+                              paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                              font=dict(color='#c9d4e0'),
+                              xaxis=dict(title="", gridcolor='rgba(120,130,140,0.12)'),
+                              yaxis=dict(title="Contribution (%)", gridcolor='rgba(120,130,140,0.12)'))
+            st.plotly_chart(fig, use_container_width=True)
+
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                st.markdown("**Top 5 Contributors**")
+                top = dfp.head(5)[['ticker', 'ret_pct', 'contribution']].copy()
+                top['Return'] = top['ret_pct'].apply(lambda x: f"{x:+.1f}%")
+                top['Contribution'] = top['contribution'].apply(lambda x: f"{x:+.2f}%")
+                st.dataframe(top[['ticker', 'Return', 'Contribution']].rename(columns={'ticker': 'Ticker'}),
+                             use_container_width=True, hide_index=True)
+            with cc2:
+                st.markdown("**Bottom 5 Contributors**")
+                bot = dfp.tail(5)[['ticker', 'ret_pct', 'contribution']].copy()
+                bot['Return'] = bot['ret_pct'].apply(lambda x: f"{x:+.1f}%")
+                bot['Contribution'] = bot['contribution'].apply(lambda x: f"{x:+.2f}%")
+                st.dataframe(bot[['ticker', 'Return', 'Contribution']].rename(columns={'ticker': 'Ticker'}),
+                             use_container_width=True, hide_index=True)
+        else:
+            st.warning("Could not compute contributions. Price data may be unavailable.")
+
+    # ---------------- MANAGE ----------------
+    with ai_tabs[2]:
+        st.subheader("Manage Portfolio")
+        st.caption("Add, edit, or remove holdings. Changes persist across app restarts. Use Reset to revert to the original 30-holding model.")
+
+        holdings = ai_load_portfolio()
+
+        # editable table
+        edit_df = pd.DataFrame(holdings)[['ticker', 'name', 'tier', 'score', 'target_weight', 'conviction_date', 'thesis']]
+        edited = st.data_editor(
+            edit_df,
+            use_container_width=True,
+            num_rows="dynamic",
+            height=500,
+            column_config={
+                "ticker": st.column_config.TextColumn("Ticker", required=True, width="small"),
+                "name": st.column_config.TextColumn("Name"),
+                "tier": st.column_config.SelectboxColumn("Tier", options=["HYPER", "TIER 1", "TIER 2", "TIER 3"]),
+                "score": st.column_config.NumberColumn("Score", min_value=0.0, max_value=10.0, step=0.1, format="%.1f"),
+                "target_weight": st.column_config.NumberColumn("Target %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f"),
+                "conviction_date": st.column_config.TextColumn("Conv. Date", width="small"),
+                "thesis": st.column_config.TextColumn("Thesis", width="large"),
+            },
+            key="ai_editor",
+        )
+
+        total_w = edited['target_weight'].fillna(0).sum()
+        wcol1, wcol2 = st.columns([1, 3])
+        wcol1.metric("Total Weight", f"{total_w:.1f}%")
+        if total_w > 100:
+            wcol2.error(f"Weights sum to {total_w:.1f}%, over 100%. Trim before saving.")
+        elif total_w < 98:
+            wcol2.warning(f"Weights sum to {total_w:.1f}%. Remainder ({100-total_w:.1f}%) is treated as cash.")
+        else:
+            wcol2.success(f"Weights sum to {total_w:.1f}%. Within range.")
+
+        bcol1, bcol2, bcol3 = st.columns([1, 1, 2])
+        with bcol1:
+            if st.button("💾 Save Changes", type="primary", use_container_width=True):
+                new_holdings = edited.to_dict('records')
+                # clean: drop rows with no ticker
+                new_holdings = [h for h in new_holdings if h.get('ticker') and str(h['ticker']).strip()]
+                for h in new_holdings:
+                    h['ticker'] = str(h['ticker']).strip().upper()
+                if ai_save_portfolio(new_holdings):
+                    st.cache_data.clear()
+                    st.success(f"Saved {len(new_holdings)} holdings.")
+                    st.rerun()
+        with bcol2:
+            if st.button("↩️ Reset to Default", use_container_width=True):
+                ai_reset_portfolio()
+                st.cache_data.clear()
+                st.success("Reverted to the original 30-holding model.")
+                st.rerun()
+        with bcol3:
+            csv = edited.to_csv(index=False)
+            st.download_button("⬇️ Export CSV", csv, "ai_portfolio.csv", "text/csv", use_container_width=True)
+
+    # ---------------- BENCH ----------------
+    with ai_tabs[3]:
+        st.subheader("Bench & Watch List")
+        st.caption("Names under consideration, not currently held. Live prices for monitoring.")
+        bench_tickers = [b['ticker'] for b in AI_BENCH]
+        with st.spinner("Fetching bench prices..."):
+            bprices = ai_fetch_prices(tuple(bench_tickers), AI_STRATEGY_INCEPTION)
+        brows = []
+        for b in AI_BENCH:
+            pr = bprices.get(b['ticker'], {})
+            brows.append({
+                "Tier": b['tier'], "Ticker": b['ticker'], "Name": b['name'],
+                "Score": f"{b['score']:.1f}" if b.get('score') is not None else "",
+                "Price": f"${pr.get('price_now'):,.2f}" if pr.get('price_now') is not None else "n/a",
+                "Since Incept": f"{pr.get('ret_pct'):+.1f}%" if pr.get('ret_pct') is not None else "n/a",
+                "Note": b.get('note', ''),
+            })
+        st.dataframe(pd.DataFrame(brows), use_container_width=True, hide_index=True, height=560)
+
+    # ---------------- MANDATE ----------------
+    with ai_tabs[4]:
+        st.markdown(AI_MANDATE_MD)
+
+    # ---------------- CONVICTION ----------------
+    with ai_tabs[5]:
+        st.markdown(AI_CONVICTION_MD)
 
 
 # ========================================
