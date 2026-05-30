@@ -4,7 +4,7 @@ pandas
 numpy
 plotly
 alpaca-py
-tzdata
 streamlit-option-menu
 scipy
+tzdata
 # schwab-py  # Uncomment for Schwab integration (pip install schwab-py)
