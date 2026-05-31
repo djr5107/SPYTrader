@@ -438,6 +438,102 @@ def get_last_trading_day():
     except Exception:
         return None
 
+
+
+@st.cache_data(ttl=300)
+def validate_ticker(symbol):
+    """Return (is_valid, info_dict). Accepts any stock/ETF symbol.
+    Cheap existence check: a 5-day history with at least one row.
+    info_dict carries price, name, and day change when available."""
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return False, {}
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="5d", interval="1d")
+        if hist.empty:
+            return False, {}
+        price = float(hist['Close'].iloc[-1])
+        prev = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else price
+        chg = price - prev
+        chg_pct = (chg / prev * 100) if prev else 0.0
+        # name lookup is best-effort; never fail on it
+        name = symbol
+        try:
+            fi = getattr(t, "fast_info", None)
+            info = t.info if not fi else {}
+            name = (info.get("shortName") or info.get("longName") or symbol) if info else symbol
+        except Exception:
+            name = symbol
+        return True, {"symbol": symbol, "price": price, "change": chg,
+                      "change_pct": chg_pct, "name": name}
+    except Exception:
+        return False, {}
+
+def ai_portfolio_tickers():
+    """Tickers from the live AI portfolio, for one-click quick-pick."""
+    try:
+        return [h['ticker'] for h in ai_load_portfolio() if h.get('ticker')]
+    except Exception:
+        return []
+
+def resolve_search_symbol(text_input, quick_pick, fallback):
+    """Decide which symbol to use. Free-text wins if non-empty, else the
+    quick-pick selection, else the fallback (first default ticker)."""
+    text_input = (text_input or "").strip().upper()
+    if text_input:
+        return text_input
+    if quick_pick and quick_pick != "—":
+        return quick_pick
+    return fallback
+
+AI_ENTRY_TARGETS = {
+    "GOOGL": {"optimal": 353.72, "secondary": 368.93, "ceiling": 418.37},
+    "AMZN":  {"optimal": 254.40, "secondary": 263.87, "ceiling": 286.88},
+    "META":  {"optimal": 594.56, "secondary": 616.70, "ceiling": 670.46},
+    "MSFT":  {"optimal": 423.23, "secondary": 438.98, "ceiling": 477.25},
+    "ORCL":  {"optimal": 207.72, "secondary": 216.75, "ceiling": 234.81},
+    "NVDA":  {"optimal": 196.36, "secondary": 204.81, "ceiling": 232.25},
+    "AVGO":  {"optimal": 415.50, "secondary": 433.37, "ceiling": 491.45},
+    "TSM":   {"optimal": 389.16, "secondary": 405.90, "ceiling": 460.30},
+    "MU":    {"optimal": 893.32, "secondary": 932.16, "ceiling": 1009.84},
+    "MRVL":  {"optimal": 188.60, "secondary": 196.80, "ceiling": 213.20},
+    "AMD":   {"optimal": 474.81, "secondary": 495.46, "ceiling": 536.74},
+    "ANET":  {"optimal": 149.90, "secondary": 155.48, "ceiling": 169.04},
+    "DELL":  {"optimal": 378.82, "secondary": 399.86, "ceiling": 433.54},
+    "ARM":   {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89},
+    "VRT":   {"optimal": 293.61, "secondary": 306.24, "ceiling": 347.28},
+    "ETN":   {"optimal": 376.56, "secondary": 390.59, "ceiling": 424.64},
+    "ASML":  {"optimal": 1499.87, "secondary": 1564.38, "ceiling": 1774.04},
+    "APH":   {"optimal": 139.83, "secondary": 145.04, "ceiling": 157.69},
+    "AMAT":  {"optimal": 423.06, "secondary": 438.81, "ceiling": 477.06},
+    "PANW":  {"optimal": 264.84, "secondary": 274.71, "ceiling": 298.66},
+    "TT":    {"optimal": 424.22, "secondary": 440.02, "ceiling": 478.38},
+    "CSCO":  {"optimal": 111.99, "secondary": 116.81, "ceiling": 124.03},
+    "VST":   {"optimal": 149.01, "secondary": 155.42, "ceiling": 176.25},
+    "CEG":   {"optimal": 267.61, "secondary": 279.12, "ceiling": 316.53},
+    "GEV":   {"optimal": 900.54, "secondary": 939.27, "ceiling": 1065.15},
+    "PWR":   {"optimal": 669.03, "secondary": 693.94, "ceiling": 754.43},
+    "CCJ":   {"optimal": 105.94, "secondary": 109.88, "ceiling": 119.46},
+    "NEE":   {"optimal": 81.79, "secondary": 84.83, "ceiling": 92.23},
+    "CAT":   {"optimal": 814.56, "secondary": 849.59, "ceiling": 902.15},
+    "FSLR":  {"optimal": 285.31, "secondary": 297.59, "ceiling": 315.99},
+}
+
+def ai_entry_zone(ticker, price_now):
+    """Classify where the live price sits vs the entry targets.
+    Returns (zone_label, target_dict_or_None)."""
+    t = AI_ENTRY_TARGETS.get(ticker)
+    if not t or price_now is None:
+        return ("—", t)
+    if price_now <= t["optimal"]:
+        return ("🟢 At/below optimal", t)
+    if price_now <= t["secondary"]:
+        return ("🟢 Buy zone", t)
+    if price_now <= t["ceiling"]:
+        return ("🟡 Below ceiling", t)
+    return ("🔴 Above ceiling", t)
+
 # Fetch market data
 @st.cache_data(ttl=60)
 def fetch_market_data():
@@ -1149,6 +1245,14 @@ AI_BENCH = [
     {"ticker": "SMR", "name": "NuScale Power", "tier": "TIER 3", "score": 3.0, "note": "Small modular reactor tech. Long-term AI power solution. Not owned: Pre-revenue, speculative. Trigger: SMR regulatory progress only."},
     {"ticker": "PRIM", "name": "Primoris Services", "tier": "TIER 3", "score": 4.0, "note": "Infrastructure contractor, growing DC backlog. Not owned: Prefer PWR. Trigger: specific DC contract wins or PWR overvalued."},
     {"ticker": "UNP", "name": "Union Pacific", "tier": "TIER 3", "score": 3.0, "note": "Transports materials for DC buildout. Not owned: Too indirect. Extreme second-derivative play only."},
+    {"ticker": "SKHHY", "name": "SK Hynix (ADR/OTC)", "tier": "TIER 1", "score": 5.0,
+     "note": "Best HBM pure-play: ~57% HBM share, pioneered the tech, strong NVDA ties. Not owned: Korea-listed, only thin OTC ADR (SKHHY) in US, hard to hold cleanly in a 401k. Up ~50% YTD 2026. Access via a US memory ETF is the practical route. Trigger: pullback + confirmed 401k tradability."},
+    {"ticker": "SSNLF", "name": "Samsung Elec (OTC)", "tier": "TIER 1", "score": 4.0,
+     "note": "HBM3/HBM4 maker closing gap on SK Hynix; some analysts call it undervalued vs MU. Not owned: Korea-listed, OTC only, and a diluted conglomerate (phones/displays/foundry). Up ~60% YTD 2026. Trigger: cleaner US access or memory-only spinoff."},
+    {"ticker": "SNDK", "name": "SanDisk", "tier": "TIER 1", "score": 4.0,
+     "note": "Pure NAND/SSD, spun from WDC in 2025. Not owned: +183% YTD 2026 (run too far, too fast); NAND is more commoditized than HBM/DRAM and the shortage is supply-cut driven. Trigger: meaningful pullback or evidence of durable NAND pricing power."},
+    {"ticker": "WDC", "name": "Western Digital", "tier": "TIER 1", "score": 3.5,
+     "note": "Post-spin, essentially an HDD pure-play; benefits from AI data-storage volumes. Not owned: +80% YTD 2026; second-derivative, lower-margin, commoditized. Trigger: HDD pricing strength sustained, or as a cheaper memory-adjacent proxy."},
 ]
 
 AI_MANDATE_MD = r"""## Investment Policy Statement & Mandate
@@ -1314,6 +1418,41 @@ def ai_reset_portfolio():
     except Exception:
         return False
 
+
+
+AI_BENCH_FILE = "ai_bench_state.json"
+
+def ai_load_bench():
+    """Load the working bench list. Starts from embedded AI_BENCH and overlays saved edits."""
+    if _os.path.exists(AI_BENCH_FILE):
+        try:
+            with open(AI_BENCH_FILE) as f:
+                saved = _json.load(f)
+            if isinstance(saved, list) and saved:
+                return saved
+        except Exception:
+            pass
+    return [dict(b) for b in AI_BENCH]
+
+def ai_save_bench(bench_list):
+    """Persist the working bench list to disk."""
+    try:
+        with open(AI_BENCH_FILE, "w") as f:
+            _json.dump(bench_list, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Could not save bench: {e}")
+        return False
+
+def ai_reset_bench():
+    """Delete saved bench edits and revert to the embedded default."""
+    try:
+        if _os.path.exists(AI_BENCH_FILE):
+            _os.remove(AI_BENCH_FILE)
+        return True
+    except Exception:
+        return False
+
 @st.cache_data(ttl=900)
 def ai_fetch_prices(tickers, inception):
     """Fetch current price and inception-date price for each ticker.
@@ -1383,6 +1522,329 @@ def ai_compute_performance(holdings, inception, benchmark="^NDX"):
 
 
 # Navigation menu
+
+
+@st.cache_data(ttl=900)
+def ai_equity_curve(holdings_key, inception, benchmark="^NDX", extra_bench="VOO"):
+    """Build the daily weighted equity curve of the portfolio since inception,
+    plus benchmark curves and the portfolio drawdown series.
+
+    holdings_key is a tuple of (ticker, weight) pairs so the cache invalidates
+    when weights change. Returns a dict with DataFrames/levels, or {} on failure.
+
+    Method: each holding indexed to its first available close on/after inception,
+    weighted by target weight; cash (100 - sum weights) held flat. Portfolio,
+    NDX and VOO are all normalized to 1.0 at inception so they overlay cleanly.
+    """
+    holdings = list(holdings_key)
+    tickers = [t for t, w in holdings if t]
+    if not tickers:
+        return {}
+    try:
+        start = (pd.Timestamp(inception) - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+        syms = list(dict.fromkeys(tickers + [benchmark, extra_bench]))
+        data = yf.download(syms, start=start, progress=False, auto_adjust=True)
+        if data is None or data.empty:
+            return {}
+        close = data['Close'] if isinstance(data.columns, pd.MultiIndex) else data
+        if not isinstance(close, pd.DataFrame):
+            close = close.to_frame()
+        incept_ts = pd.Timestamp(inception)
+        # restrict to on/after inception
+        close = close[close.index >= incept_ts]
+        if close.empty:
+            return {}
+
+        # portfolio curve
+        port = pd.Series(0.0, index=close.index)
+        wsum = 0.0
+        for t, w in holdings:
+            if t not in close.columns:
+                continue
+            s = close[t].dropna()
+            if s.empty:
+                continue
+            port = port.add((close[t] / s.iloc[0]) * (w / 100.0), fill_value=0)
+            wsum += w / 100.0
+        cash_w = max(0.0, 1.0 - wsum)
+        denom = wsum + cash_w
+        if denom <= 0:
+            return {}
+        port = (port + cash_w) / denom
+
+        def _norm(sym):
+            if sym in close.columns:
+                s = close[sym].dropna()
+                if not s.empty:
+                    return close[sym] / s.iloc[0]
+            return pd.Series(index=close.index, dtype=float)
+
+        ndx = _norm(benchmark)
+        voo = _norm(extra_bench)
+
+        dd = (port / port.cummax() - 1.0) * 100.0
+        max_dd = float(dd.min()) if not dd.empty else 0.0
+        max_dd_date = dd.idxmin() if not dd.empty else None
+        peak_date = port[:max_dd_date].idxmax() if max_dd_date is not None else None
+        # recovery check
+        rec_date = None
+        if peak_date is not None and max_dd_date is not None:
+            peak_val = port[peak_date]
+            after = port[max_dd_date:]
+            rec = after[after >= peak_val]
+            rec_date = rec.index[0] if not rec.empty else None
+
+        rets = port.pct_change().dropna()
+        ann_vol = float(rets.std() * (252 ** 0.5) * 100) if not rets.empty else 0.0
+
+        return {
+            "dates": [d.strftime("%Y-%m-%d") for d in port.index],
+            "port": [round((v - 1) * 100, 3) for v in port.values],
+            "ndx": [round((v - 1) * 100, 3) if pd.notna(v) else None for v in ndx.reindex(port.index).values],
+            "voo": [round((v - 1) * 100, 3) if pd.notna(v) else None for v in voo.reindex(port.index).values],
+            "drawdown": [round(v, 3) if pd.notna(v) else None for v in dd.values],
+            "max_dd": round(max_dd, 2),
+            "max_dd_date": max_dd_date.strftime("%Y-%m-%d") if max_dd_date is not None else None,
+            "peak_date": peak_date.strftime("%Y-%m-%d") if peak_date is not None else None,
+            "rec_date": rec_date.strftime("%Y-%m-%d") if rec_date is not None else None,
+            "ann_vol": round(ann_vol, 1),
+            "port_total": round((float(port.iloc[-1]) - 1) * 100, 2),
+            "ndx_total": round((float(ndx.reindex(port.index).iloc[-1]) - 1) * 100, 2) if benchmark in close.columns else None,
+            "voo_total": round((float(voo.reindex(port.index).iloc[-1]) - 1) * 100, 2) if extra_bench in close.columns else None,
+        }
+    except Exception:
+        return {}
+
+def ai_risk_stats(ec, rf_annual=0.043):
+    """Derive risk statistics from the equity-curve dict produced by
+    ai_equity_curve(). Returns a dict of fact-sheet metrics. All derived from
+    the daily MODEL curve, so they describe the strategy allocation, not fills."""
+    import numpy as _np
+    stats = {}
+    port = ec.get("port") or []
+    ndx = ec.get("ndx") or []
+    if len(port) < 5:
+        return stats
+    # rebuild daily levels from cumulative % to compute daily returns
+    lvl = _np.array([1 + p / 100 for p in port], dtype=float)
+    rets = _np.diff(lvl) / lvl[:-1]
+    # benchmark daily returns (align lengths)
+    bret = None
+    nlvl = None
+    if ndx and len([x for x in ndx if x is not None]) >= 5:
+        nlvl = _np.array([1 + (x or 0) / 100 for x in ndx], dtype=float)
+        bret = _np.diff(nlvl) / nlvl[:-1]
+    ann = 252
+    mean_d = rets.mean()
+    std_d = rets.std(ddof=1)
+    ann_ret_geo = (lvl[-1] / lvl[0]) ** (ann / len(rets)) - 1   # annualized (geometric)
+    ann_vol = std_d * _np.sqrt(ann)
+    rf_d = (1 + rf_annual) ** (1 / ann) - 1
+    sharpe = ((mean_d - rf_d) / std_d * _np.sqrt(ann)) if std_d > 0 else None
+    downside = rets[rets < 0]
+    sortino = ((mean_d - rf_d) / downside.std(ddof=1) * _np.sqrt(ann)) if len(downside) > 1 and downside.std(ddof=1) > 0 else None
+    # drawdown already in ec
+    max_dd = ec.get("max_dd")
+    calmar = (ann_ret_geo * 100 / abs(max_dd)) if max_dd else None
+    # beta / alpha / tracking error / IR vs NDX
+    beta = alpha = te = ir = up_capture = down_capture = corr = None
+    if bret is not None and len(bret) == len(rets):
+        cov = _np.cov(rets, bret)
+        if cov[1, 1] > 0:
+            beta = cov[0, 1] / cov[1, 1]
+        corr = _np.corrcoef(rets, bret)[0, 1]
+        active = rets - bret
+        te = active.std(ddof=1) * _np.sqrt(ann)
+        ir = (active.mean() * ann) / te if te > 0 else None
+        b_ann_geo = (nlvl[-1] / nlvl[0]) ** (ann / len(bret)) - 1
+        rf_ann = rf_annual
+        if beta is not None:
+            alpha = (ann_ret_geo - rf_ann) - beta * (b_ann_geo - rf_ann)
+        up = bret > 0
+        dn = bret < 0
+        if up.sum() > 0 and bret[up].sum() != 0:
+            up_capture = rets[up].sum() / bret[up].sum() * 100
+        if dn.sum() > 0 and bret[dn].sum() != 0:
+            down_capture = rets[dn].sum() / bret[dn].sum() * 100
+    pos = (rets > 0).sum()
+    win_rate = pos / len(rets) * 100
+    stats.update({
+        "ann_return": round(ann_ret_geo * 100, 2),
+        "ann_vol": round(ann_vol * 100, 2),
+        "sharpe": round(sharpe, 2) if sharpe is not None else None,
+        "sortino": round(sortino, 2) if sortino is not None else None,
+        "calmar": round(calmar, 2) if calmar is not None else None,
+        "max_dd": max_dd,
+        "beta": round(beta, 2) if beta is not None else None,
+        "alpha": round(alpha * 100, 2) if alpha is not None else None,
+        "tracking_error": round(te * 100, 2) if te is not None else None,
+        "info_ratio": round(ir, 2) if ir is not None else None,
+        "up_capture": round(up_capture, 1) if up_capture is not None else None,
+        "down_capture": round(down_capture, 1) if down_capture is not None else None,
+        "correlation": round(corr, 2) if corr is not None else None,
+        "win_rate": round(win_rate, 1),
+        "n_days": len(rets) + 1,
+    })
+    return stats
+
+
+def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
+                            inception, as_of, benchmark_label="Nasdaq-100 (NDX)"):
+    """Assemble the fact sheet HTML string from live data."""
+    tw = sum(h.get('target_weight') or 0 for h in holdings)
+    cash = max(0, 100 - tw)
+    active = (strat_ret - bench_ret) if (strat_ret is not None and bench_ret is not None) else None
+
+    # tier allocation
+    tier_w = {}
+    for h in holdings:
+        tier_w[h['tier']] = tier_w.get(h['tier'], 0) + (h.get('target_weight') or 0)
+    tier_rows = ""
+    tlabel = {"HYPER": "Hyperscalers", "TIER 1": "Tier 1: Direct", "TIER 2": "Tier 2: Secondary", "TIER 3": "Tier 3: Tertiary"}
+    for t in ["HYPER", "TIER 1", "TIER 2", "TIER 3"]:
+        if tier_w.get(t):
+            tier_rows += f"<tr><td>{tlabel[t]}</td><td class='r'>{tier_w[t]:.1f}%</td></tr>"
+    if cash > 0.05:
+        tier_rows += f"<tr><td>Cash</td><td class='r'>{cash:.1f}%</td></tr>"
+
+    # top 10 holdings by weight
+    sorted_h = sorted(per, key=lambda x: (x.get('target_weight') or 0), reverse=True)
+    top10 = sorted_h[:10]
+    hold_rows = ""
+    for h in top10:
+        ret = h.get('ret_pct')
+        rs = f"{ret:+.1f}%" if ret is not None else "n/a"
+        hold_rows += (f"<tr><td class='tk'>{h['ticker']}</td><td>{h['name']}</td>"
+                      f"<td>{h['tier'].replace('TIER ','T').replace('HYPER','Hyper')}</td>"
+                      f"<td class='r'>{(h.get('target_weight') or 0):.1f}%</td>"
+                      f"<td class='r'>{rs}</td></tr>")
+
+    # performance table
+    def pct(v): return f"{v:+.2f}%" if v is not None else "n/a"
+    perf_rows = (
+        f"<tr><td>Strategy (model)</td><td class='r'>{pct(strat_ret)}</td></tr>"
+        f"<tr><td>{benchmark_label}</td><td class='r'>{pct(bench_ret)}</td></tr>"
+        f"<tr><td>Active return</td><td class='r {'pos' if (active or 0)>=0 else 'neg'}'>{pct(active)}</td></tr>"
+    )
+    if ec.get("voo_total") is not None:
+        perf_rows += f"<tr><td>S&amp;P 500 (VOO)</td><td class='r'>{pct(ec['voo_total'])}</td></tr>"
+
+    def stat(v, suf=""): return f"{v}{suf}" if v is not None else "n/a"
+    risk_rows = (
+        f"<tr><td>Annualized return</td><td class='r'>{stat(stats.get('ann_return'),'%')}</td></tr>"
+        f"<tr><td>Annualized volatility (std dev)</td><td class='r'>{stat(stats.get('ann_vol'),'%')}</td></tr>"
+        f"<tr><td>Sharpe ratio</td><td class='r'>{stat(stats.get('sharpe'))}</td></tr>"
+        f"<tr><td>Sortino ratio</td><td class='r'>{stat(stats.get('sortino'))}</td></tr>"
+        f"<tr><td>Max drawdown</td><td class='r neg'>{stat(stats.get('max_dd'),'%')}</td></tr>"
+        f"<tr><td>Calmar ratio</td><td class='r'>{stat(stats.get('calmar'))}</td></tr>"
+        f"<tr><td>Beta vs NDX</td><td class='r'>{stat(stats.get('beta'))}</td></tr>"
+        f"<tr><td>Alpha (annualized)</td><td class='r'>{stat(stats.get('alpha'),'%')}</td></tr>"
+        f"<tr><td>Tracking error</td><td class='r'>{stat(stats.get('tracking_error'),'%')}</td></tr>"
+        f"<tr><td>Information ratio</td><td class='r'>{stat(stats.get('info_ratio'))}</td></tr>"
+        f"<tr><td>Up / down capture</td><td class='r'>{stat(stats.get('up_capture'),'%')} / {stat(stats.get('down_capture'),'%')}</td></tr>"
+        f"<tr><td>Correlation to NDX</td><td class='r'>{stat(stats.get('correlation'))}</td></tr>"
+    )
+
+    # sparkline points (cumulative return) as inline SVG polyline
+    pts = ec.get("port") or []
+    spark = ""
+    if len(pts) > 2:
+        lo, hi = min(pts), max(pts)
+        rng = (hi - lo) or 1
+        W, H = 320, 60
+        coords = []
+        for i, v in enumerate(pts):
+            x = i / (len(pts) - 1) * W
+            y = H - (v - lo) / rng * H
+            coords.append(f"{x:.1f},{y:.1f}")
+        spark = (f"<svg width='{W}' height='{H}' viewBox='0 0 {W} {H}'>"
+                 f"<polyline fill='none' stroke='#2dd4bf' stroke-width='2' points='{' '.join(coords)}'/></svg>")
+
+    css = """
+    body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1f2b;margin:0;background:#fff;font-size:12px;line-height:1.45}
+    .sheet{max-width:900px;margin:0 auto;padding:28px 32px}
+    .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0c2a45;padding-bottom:14px;margin-bottom:16px}
+    .hdr h1{font-size:1.5rem;margin:0;color:#0c2a45;letter-spacing:-.3px}
+    .hdr .sub{color:#5b6675;font-size:.82rem;margin-top:3px}
+    .hdr .asof{text-align:right;font-size:.72rem;color:#5b6675}
+    .hdr .asof .big{font-size:1.4rem;color:#0c7a4b;font-weight:700;display:block}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+    .grid3{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:18px}
+    h2{font-size:.72rem;text-transform:uppercase;letter-spacing:1px;color:#0c2a45;border-bottom:1px solid #d8dee8;padding-bottom:4px;margin:14px 0 6px}
+    table{width:100%;border-collapse:collapse}
+    td{padding:3px 2px;border-bottom:1px solid #eef1f5;font-size:.78rem}
+    td.r{text-align:right;font-variant-numeric:tabular-nums;font-feature-settings:'tnum'}
+    td.tk{font-weight:700;font-family:ui-monospace,Menlo,monospace}
+    .pos{color:#0c7a4b}.neg{color:#b3261e}
+    .box{background:#f6f8fb;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;margin-bottom:10px}
+    .kv{display:flex;justify-content:space-between;font-size:.78rem;padding:2px 0}
+    .kv .k{color:#5b6675}
+    .narr{font-size:.78rem;color:#2b3340;margin:4px 0}
+    .foot{margin-top:18px;border-top:1px solid #d8dee8;padding-top:10px;font-size:.62rem;color:#8a93a3;line-height:1.5}
+    .pill{display:inline-block;background:#0c2a45;color:#fff;font-size:.6rem;padding:1px 7px;border-radius:3px;letter-spacing:.5px}
+    """
+
+    html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>AI Infrastructure Equity Strategy — Fact Sheet</title>
+<style>{css}</style></head><body><div class='sheet'>
+<div class='hdr'>
+  <div><h1>AI Infrastructure Equity Strategy</h1>
+    <div class='sub'>Thematic / Tactical Growth Equity &nbsp;·&nbsp; <span class='pill'>MODEL</span> Benchmark: {benchmark_label}</div></div>
+  <div class='asof'><span class='big'>{strat_ret:+.1f}%</span>Strategy since inception<br>{inception} → {as_of}</div>
+</div>
+
+<div class='grid3'>
+  <div>
+    <h2>Strategy Overview</h2>
+    <div class='kv'><span class='k'>Objective</span><span>Capital appreciation</span></div>
+    <div class='kv'><span class='k'>Style</span><span>Thematic / tactical growth</span></div>
+    <div class='kv'><span class='k'>Universe</span><span>US-listed equities + ADRs</span></div>
+    <div class='kv'><span class='k'>Holdings</span><span>{len(holdings)} (target 30-50)</span></div>
+    <div class='kv'><span class='k'>Inception</span><span>{inception}</span></div>
+    <div class='kv'><span class='k'>Benchmark</span><span>NDX</span></div>
+    <div class='kv'><span class='k'>Reference</span><span>Indxx AI &amp; Big Data</span></div>
+  </div>
+  <div>
+    <h2>Fees</h2>
+    <div class='kv'><span class='k'>SMA &lt; $250K</span><span>0.55%</span></div>
+    <div class='kv'><span class='k'>SMA $250K-1M</span><span>0.50%</span></div>
+    <div class='kv'><span class='k'>SMA $1M+</span><span>0.40%</span></div>
+    <div class='kv'><span class='k'>SMA $5M+</span><span>0.35%</span></div>
+    <div class='kv'><span class='k'>ETF</span><span>0.65%</span></div>
+    <div class='kv'><span class='k'>SMA minimum</span><span>$100,000</span></div>
+  </div>
+  <div>
+    <h2>Performance (cumulative)</h2>
+    <table>{perf_rows}</table>
+    <div style='margin-top:6px'>{spark}</div>
+    <div class='narr' style='font-size:.66rem;color:#8a93a3'>Cumulative return since inception</div>
+  </div>
+</div>
+
+<div class='grid2' style='margin-top:8px'>
+  <div>
+    <h2>Risk Statistics</h2>
+    <table>{risk_rows}</table>
+    <div class='narr' style='font-size:.66rem;color:#8a93a3'>Annualized from daily model returns over {stats.get('n_days','?')} trading days. Risk-free 4.3%.</div>
+  </div>
+  <div>
+    <h2>Tier Allocation</h2>
+    <table>{tier_rows}</table>
+    <h2 style='margin-top:14px'>Top 10 Holdings</h2>
+    <table>{hold_rows}</table>
+  </div>
+</div>
+
+<div style='margin-top:10px'>
+  <h2>Investment Mandate &amp; Process</h2>
+  <div class='narr'>The strategy invests across the full AI infrastructure supply chain through a four-tier conviction framework: Hyperscalers (capex spenders), Tier 1 Direct (GPUs, custom silicon, memory, networking), Tier 2 Secondary (power, cooling, connectors, semi equipment), and Tier 3 Tertiary (power generation, utilities, grid, fuel). Position sizing is driven by a 1-10 conviction score across four factors: Fundamental Strength (35%), Competitive Positioning (30%), AI Revenue Visibility (20%), and Tier Outlook (15%). Hard constraints: 8% max single position (12.5% drift trigger), 2% minimum, tier guardrails (10% floor / 45% ceiling per tier), 30-50 holdings, 0-5% cash. Rebalanced quarterly and on material events. Tracking-error target 3-8% annualized; max GICS Technology 70%.</div>
+</div>
+
+<div class='foot'>
+<strong>MODEL / HYPOTHETICAL PERFORMANCE.</strong> Performance and risk statistics are derived from a model portfolio: target weights applied to each holding's actual price history since {inception}, with cash held flat and all figures indexed to inception. They reflect the strategy allocation, not the results of any actual account, and do not include the impact of advisory fees, transaction costs, taxes, or the timing of actual purchases and sales. Model and hypothetical results have inherent limitations, including hindsight and the benefit of being designed with knowledge of prior market behavior; no representation is made that any account will achieve similar results. Past performance does not guarantee future results. Investing involves risk including possible loss of principal. This material is for informational purposes only, is not investment advice, and is not an offer or solicitation. Holdings and allocations are subject to change. Generated {as_of} from live data.
+</div>
+</div></body></html>"""
+    return html
+
 selected = option_menu(
     menu_title=None,
     options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Premium Seller", "AI Strategy", "Macro Dashboard"],
@@ -1416,6 +1878,51 @@ if selected == "Trading Hub":
             """, unsafe_allow_html=True)
     
     st.divider()
+
+    # ---- AI Portfolio Snapshot ----
+    with st.expander("🤖 AI Portfolio Snapshot", expanded=True):
+        snap_holdings = ai_load_portfolio()
+        with st.spinner("Loading AI portfolio..."):
+            s_strat, s_bench, s_per = ai_compute_performance(
+                snap_holdings, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK)
+
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        sc1.metric("Holdings", f"{len(snap_holdings)}")
+        sc2.metric("Strategy / incept", f"{s_strat:+.1f}%" if s_strat is not None else "n/a")
+        s_delta = (s_strat - s_bench) if (s_strat is not None and s_bench is not None) else None
+        sc3.metric("NDX / incept", f"{s_bench:+.1f}%" if s_bench is not None else "n/a",
+                   f"{s_delta:+.1f}% active" if s_delta is not None else None)
+        # count names in each entry zone right now
+        zone_counts = {"🟢": 0, "🟡": 0, "🔴": 0, "—": 0}
+        for p in s_per:
+            z, _ = ai_entry_zone(p['ticker'], p.get('price_now'))
+            key = z.split()[0] if z and z[0] in "🟢🟡🔴" else "—"
+            zone_counts[key] = zone_counts.get(key, 0) + 1
+        sc4.metric("In buy zone", f"{zone_counts['🟢']} 🟢",
+                   help=f"🟢 at/below secondary · 🟡 below ceiling ({zone_counts['🟡']}) · 🔴 above ceiling ({zone_counts['🔴']})")
+
+        # compact per-holding table with today's move + entry zone
+        srows = []
+        for p in s_per:
+            tk = p['ticker']
+            pnow = p.get('price_now')
+            zone, tgt = ai_entry_zone(tk, pnow)
+            # today's move from 2-day history via the shared market fetch when available
+            srows.append({
+                "Tier": p['tier'], "Ticker": tk,
+                "Price": f"${pnow:,.2f}" if pnow is not None else "n/a",
+                "Since Incept": f"{p.get('ret_pct'):+.1f}%" if p.get('ret_pct') is not None else "n/a",
+                "Wt": f"{p.get('target_weight') or 0:.1f}%",
+                "Zone": zone,
+                "Optimal": f"${tgt['optimal']:,.2f}" if tgt else "—",
+                "Ceiling": f"${tgt['ceiling']:,.2f}" if tgt else "—",
+            })
+        tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
+        srows.sort(key=lambda r: (tier_order.get(r["Tier"], 9), r["Ticker"]))
+        st.dataframe(pd.DataFrame(srows), use_container_width=True, hide_index=True, height=340)
+        st.caption("Zone vs entry targets: 🟢 at/below secondary (buy) · 🟡 below do-not-exceed · 🔴 above ceiling. "
+                   "Full detail and the performance chart live on the AI Strategy tab.")
+
     
     # Market Status
     market_open = is_market_open()
@@ -2488,84 +2995,85 @@ elif selected == "Performance":
 
 elif selected == "Chart Analysis":
     st.header("📈 Chart Analysis")
-    
-    ticker_choice = st.selectbox("Select Ticker", TICKERS)
-    
-    try:
-        t = yf.Ticker(ticker_choice)
-        hist = t.history(period="6mo", interval="1d")
-        
-        if not hist.empty:
-            df = calculate_technical_indicators(hist)
-            
-            # Create chart
-            fig = make_subplots(
-                rows=3, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0.05,
-                row_heights=[0.6, 0.2, 0.2],
-                subplot_titles=(f'{ticker_choice} Price', 'RSI', 'Volume')
-            )
-            
-            # Candlestick
-            fig.add_trace(go.Candlestick(
-                x=df.index,
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
-                name='Price'
-            ), row=1, col=1)
-            
-            # SMAs
-            for period, color in [(20, 'orange'), (50, 'blue'), (200, 'purple')]:
-                if f'SMA_{period}' in df.columns:
-                    fig.add_trace(go.Scatter(
-                        x=df.index,
-                        y=df[f'SMA_{period}'],
-                        name=f'SMA {period}',
-                        line=dict(color=color, width=1)
-                    ), row=1, col=1)
-            
-            # RSI
-            if 'RSI' in df.columns:
-                fig.add_trace(go.Scatter(
-                    x=df.index,
-                    y=df['RSI'],
-                    name='RSI',
-                    line=dict(color='purple', width=1)
-                ), row=2, col=1)
-                
-                fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-                fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-            
-            # Volume
-            fig.add_trace(go.Bar(
-                x=df.index,
-                y=df['Volume'],
-                name='Volume',
-                marker_color='lightblue'
-            ), row=3, col=1)
-            
-            fig.update_layout(height=800, showlegend=True, xaxis_rangeslider_visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Current stats
-            st.subheader("Current Stats")
-            col1, col2, col3, col4 = st.columns(4)
-            
-            current_price = df['Close'].iloc[-1]
-            rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 0
-            volume_ratio = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns else 1.0
-            adx = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
-            
-            col1.metric("Price", f"${current_price:.2f}")
-            col2.metric("RSI", f"{rsi:.1f}")
-            col3.metric("Volume Ratio", f"{volume_ratio:.2f}x")
-            col4.metric("ADX", f"{adx:.1f}")
-            
-    except Exception as e:
-        st.error(f"Error loading chart: {e}")
+    st.caption("Type any stock or ETF symbol, or quick-pick a default / AI-portfolio holding.")
+
+    # symbol entry row: free text + two quick-pick sources
+    ec1, ec2, ec3 = st.columns([2, 1, 1])
+    with ec1:
+        typed = st.text_input("Search symbol", placeholder="e.g. NVDA, AAPL, VOO, SMH", key="chart_typed").strip().upper()
+    with ec2:
+        default_pick = st.selectbox("Defaults", ["—"] + TICKERS, key="chart_default_pick")
+    with ec3:
+        ai_list = ai_portfolio_tickers()
+        ai_pick = st.selectbox("AI portfolio", ["—"] + ai_list, key="chart_ai_pick")
+
+    # precedence: typed > AI pick > default pick > SPY
+    chosen = typed or (ai_pick if ai_pick != "—" else "") or (default_pick if default_pick != "—" else "") or "SPY"
+
+    period = st.radio("History", ["3mo", "6mo", "1y", "2y"], index=1, horizontal=True, key="chart_period")
+
+    valid, info = validate_ticker(chosen)
+    if not valid:
+        st.error(f"Could not find data for '{chosen}'. Check the symbol (US-listed stocks and ETFs work; some ADRs/foreign listings may not).")
+    else:
+        nm = info.get("name", chosen)
+        st.markdown(f"### {chosen} — {nm}")
+        try:
+            t = yf.Ticker(chosen)
+            hist = t.history(period=period, interval="1d")
+
+            if not hist.empty:
+                df = calculate_technical_indicators(hist)
+
+                fig = make_subplots(
+                    rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+                    row_heights=[0.6, 0.2, 0.2],
+                    subplot_titles=(f'{chosen} Price', 'RSI', 'Volume')
+                )
+                fig.add_trace(go.Candlestick(
+                    x=df.index, open=df['Open'], high=df['High'],
+                    low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
+                for p, color in [(20, 'orange'), (50, 'blue'), (200, 'purple')]:
+                    if f'SMA_{p}' in df.columns:
+                        fig.add_trace(go.Scatter(x=df.index, y=df[f'SMA_{p}'],
+                                     name=f'SMA {p}', line=dict(color=color, width=1)), row=1, col=1)
+                if 'RSI' in df.columns:
+                    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI',
+                                 line=dict(color='purple', width=1)), row=2, col=1)
+                    fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+                    fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+                fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume',
+                             marker_color='lightblue'), row=3, col=1)
+                fig.update_layout(height=800, showlegend=True, xaxis_rangeslider_visible=False)
+                st.plotly_chart(fig, use_container_width=True)
+
+                # current stats
+                st.subheader("Current Stats")
+                s1, s2, s3, s4, s5 = st.columns(5)
+                cur = df['Close'].iloc[-1]
+                rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 0
+                vr = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns else 1.0
+                adx = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
+                s1.metric("Price", f"${cur:.2f}", f"{info.get('change_pct',0):+.2f}%")
+                s2.metric("RSI", f"{rsi:.1f}")
+                s3.metric("Volume Ratio", f"{vr:.2f}x")
+                s4.metric("ADX", f"{adx:.1f}")
+                # period return
+                try:
+                    pret = (df['Close'].iloc[-1] / df['Close'].iloc[0] - 1) * 100
+                    s5.metric(f"{period} Return", f"{pret:+.1f}%")
+                except Exception:
+                    s5.metric(f"{period} Return", "n/a")
+
+                # if this symbol is an AI holding, surface its entry targets
+                t_tgt = AI_ENTRY_TARGETS.get(chosen)
+                if t_tgt:
+                    zone, _ = ai_entry_zone(chosen, cur)
+                    st.info(f"**AI portfolio holding — entry targets:** optimal ${t_tgt['optimal']:,.2f} · "
+                            f"secondary ${t_tgt['secondary']:,.2f} · do-not-exceed ${t_tgt['ceiling']:,.2f}  →  **{zone}**")
+        except Exception as e:
+            st.error(f"Error loading chart: {e}")
+
 
 # ========================================
 # OPTIONS CHAIN
@@ -2573,24 +3081,39 @@ elif selected == "Chart Analysis":
 
 elif selected == "Options Chain":
     st.header("💱 Options Chain")
-    
-    ticker_choice = st.selectbox("Select Ticker", TICKERS, key="opt_ticker")
-    
+    st.caption("Type any optionable stock or ETF, or quick-pick a default / AI-portfolio holding.")
+
+    oc1, oc2, oc3 = st.columns([2, 1, 1])
+    with oc1:
+        opt_typed = st.text_input("Search symbol", placeholder="e.g. NVDA, AAPL, SMH", key="opt_typed").strip().upper()
+    with oc2:
+        opt_default = st.selectbox("Defaults", ["—"] + TICKERS, key="opt_default_pick")
+    with oc3:
+        opt_ai = st.selectbox("AI portfolio", ["—"] + ai_portfolio_tickers(), key="opt_ai_pick")
+
+    ticker_choice = opt_typed or (opt_ai if opt_ai != "—" else "") or (opt_default if opt_default != "—" else "") or "SPY"
+
     col1, col2 = st.columns(2)
     with col1:
         dte_min = st.number_input("Min DTE", value=14, min_value=1, max_value=365)
     with col2:
         dte_max = st.number_input("Max DTE", value=45, min_value=1, max_value=365)
-    
+
     if st.button("Load Options Chain"):
-        with st.spinner("Loading..."):
-            options_df = get_options_chain(ticker_choice, dte_min, dte_max)
-            if not options_df.empty:
-                st.session_state.opt_chain_df = options_df
-                st.session_state.opt_chain_ticker = ticker_choice
-            else:
+        with st.spinner(f"Loading {ticker_choice} options..."):
+            valid, _ = validate_ticker(ticker_choice)
+            if not valid:
+                st.error(f"Could not find '{ticker_choice}'. Check the symbol.")
                 st.session_state.opt_chain_df = None
-                st.warning("No options data available")
+            else:
+                options_df = get_options_chain(ticker_choice, dte_min, dte_max)
+                if not options_df.empty:
+                    st.session_state.opt_chain_df = options_df
+                    st.session_state.opt_chain_ticker = ticker_choice
+                else:
+                    st.session_state.opt_chain_df = None
+                    st.warning(f"No options data for {ticker_choice} in this DTE window. "
+                               "The symbol may not be optionable, or try widening the DTE range.")
 
     # Render from session state so the Calls/Puts/Both radio works without a rescan
     chain_df = st.session_state.get('opt_chain_df')
@@ -2606,7 +3129,6 @@ elif selected == "Options Chain":
         else:
             filtered = chain_df
 
-        # show bid and ask explicitly (mid alone hides untradeable strikes)
         display_cols = ['strike', 'type', 'dte', 'expiration', 'bid', 'ask', 'mid',
                         'lastPrice', 'impliedVolatility', 'volume', 'openInterest']
         available_cols = [col for col in display_cols if col in filtered.columns]
@@ -2617,6 +3139,7 @@ elif selected == "Options Chain":
             st.dataframe(filtered[available_cols].sort_values(['dte', 'strike']),
                          use_container_width=True, hide_index=True)
             st.caption("When selling, you collect the **bid**, not the mid. Strikes showing bid = 0 cannot be sold at any positive price.")
+
 
 # ========================================
 # PREMIUM SELLER
@@ -2636,7 +3159,10 @@ elif selected == "Premium Seller":
     # ---- inputs ----
     c1, c2, c3 = st.columns(3)
     with c1:
-        ps_symbol = st.selectbox("Underlying", TICKERS, key="ps_symbol")
+        _ps_typed = st.text_input("Underlying (type any optionable symbol)",
+                                  placeholder="e.g. SPY, NVDA, SMH", key="ps_typed").strip().upper()
+        _ps_default = st.selectbox("…or pick", ["—"] + TICKERS + ai_portfolio_tickers(), key="ps_symbol_pick")
+        ps_symbol = _ps_typed or (_ps_default if _ps_default != "—" else "") or "SPY"
         ps_structures = st.multiselect(
             "Structures",
             ["Cash-Secured Put", "Put Credit Spread", "Iron Condor", "Short Strangle"],
@@ -3064,7 +3590,7 @@ elif selected == "AI Strategy":
     st.header("🤖 AI Infrastructure Equity Strategy")
     st.caption("Live tracking for the AI infrastructure portfolio. Inception 2026-02-10. Benchmark: Nasdaq-100 (NDX).")
 
-    ai_tabs = st.tabs(["📊 Portfolio", "📈 Performance", "✏️ Manage", "👁️ Bench", "📜 Mandate", "🎯 Conviction"])
+    ai_tabs = st.tabs(["📊 Portfolio", "📈 Performance", "✏️ Manage", "👁️ Bench", "📜 Mandate", "🎯 Conviction", "📄 Fact Sheet"])
 
     # ---------------- PORTFOLIO ----------------
     with ai_tabs[0]:
@@ -3096,8 +3622,11 @@ elif selected == "AI Strategy":
                 cur = max(0, 100 - tw)
             tcols[i].metric(tier.title(), f"{cur:.0f}%", f"target {target}%", delta_color="off")
 
-        # holdings table, tier-grouped
+        # ----- entry-target view toggle -----
         st.markdown("##### Holdings")
+        show_entries = st.checkbox("Show entry-target columns (optimal / secondary / do-not-exceed)", value=True,
+                                   help="Limit-order anchors from the buildout plan. Zone shows where the live price sits now.")
+
         df = pd.DataFrame(per)
         if not df.empty:
             df['Price'] = df['price_now'].apply(lambda x: f"${x:,.2f}" if x is not None else "n/a")
@@ -3105,13 +3634,39 @@ elif selected == "AI Strategy":
             df['Contribution'] = df['contribution'].apply(lambda x: f"{x:+.2f}%" if x is not None else "n/a")
             df['Weight'] = df['target_weight'].apply(lambda x: f"{x:.0f}%" if x is not None else "")
             df['Score'] = df['score'].apply(lambda x: f"{x:.1f}" if x is not None else "")
+
+            # entry-target columns
+            def _fmt_price(v):
+                return f"${v:,.2f}" if v is not None else "—"
+            zones, opt, sec, ceil = [], [], [], []
+            for _, r in df.iterrows():
+                z, t = ai_entry_zone(r['ticker'], r['price_now'])
+                zones.append(z)
+                opt.append(_fmt_price(t["optimal"]) if t else "—")
+                sec.append(_fmt_price(t["secondary"]) if t else "—")
+                ceil.append(_fmt_price(t["ceiling"]) if t else "—")
+            df['Optimal'] = opt
+            df['Secondary'] = sec
+            df['Do-Not-Exceed'] = ceil
+            df['Zone'] = zones
+
             tier_order = ["HYPER", "TIER 1", "TIER 2", "TIER 3"]
             df['_ord'] = df['tier'].apply(lambda t: tier_order.index(t) if t in tier_order else 99)
             df = df.sort_values(['_ord', 'target_weight'], ascending=[True, False])
-            show = df[['tier', 'ticker', 'name', 'Score', 'Weight', 'Price', 'Since Incept', 'Contribution']]
-            show = show.rename(columns={'tier': 'Tier', 'ticker': 'Ticker', 'name': 'Name'})
+
+            if show_entries:
+                cols = ['tier', 'ticker', 'name', 'Score', 'Weight', 'Price', 'Zone',
+                        'Optimal', 'Secondary', 'Do-Not-Exceed', 'Since Incept', 'Contribution']
+            else:
+                cols = ['tier', 'ticker', 'name', 'Score', 'Weight', 'Price', 'Since Incept', 'Contribution']
+            show = df[cols].rename(columns={'tier': 'Tier', 'ticker': 'Ticker', 'name': 'Name'})
             st.dataframe(show, use_container_width=True, hide_index=True, height=560)
-            st.caption("Since Incept = each name's price change since 2026-02-10. Contribution = target weight × that return.")
+            if show_entries:
+                st.caption("Zone: 🟢 at/below optimal or in buy zone · 🟡 below the do-not-exceed ceiling · 🔴 above ceiling (wait or pass). "
+                           "Optimal = the pullback worth waiting for; Secondary = reasonable scale-in; Do-Not-Exceed = ceiling, buy if running but not above. "
+                           "Anchored to 2026-05-29 prices; these are limit-order guides, not forecasts.")
+            else:
+                st.caption("Since Incept = each name's price change since 2026-02-10. Contribution = target weight × that return.")
 
             # per-holding thesis expander
             with st.expander("📝 View conviction thesis per holding"):
@@ -3119,6 +3674,9 @@ elif selected == "AI Strategy":
                 rec = next((h for h in holdings if h['ticker'] == pick), None)
                 if rec:
                     st.markdown(f"**{rec['ticker']} — {rec['name']}** · {rec['tier']} · Score {rec.get('score','?')} · Target {rec.get('target_weight','?')}%")
+                    t = AI_ENTRY_TARGETS.get(rec['ticker'])
+                    if t:
+                        st.markdown(f"Entry targets — optimal **${t['optimal']:,.2f}** · secondary **${t['secondary']:,.2f}** · do-not-exceed **${t['ceiling']:,.2f}**")
                     st.write(rec.get('thesis', 'No thesis recorded.'))
         else:
             st.warning("No holdings to display.")
@@ -3173,73 +3731,255 @@ elif selected == "AI Strategy":
         else:
             st.warning("Could not compute contributions. Price data may be unavailable.")
 
+
+        # ===== Performance over time + Max Drawdown =====
+        st.divider()
+        st.markdown("##### Performance Over Time (since inception)")
+        hk = tuple((h['ticker'], h.get('target_weight') or 0) for h in holdings)
+        with st.spinner("Building equity curve..."):
+            ec = ai_equity_curve(hk, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK, "VOO")
+
+        if not ec or not ec.get("dates"):
+            st.warning("Could not build the equity curve (price history unavailable right now). Try refreshing.")
+        else:
+            dts = pd.to_datetime(ec["dates"])
+            fig = make_subplots(
+                rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                row_heights=[0.68, 0.32],
+                subplot_titles=("Cumulative Return: Strategy vs NDX vs VOO", "Strategy Drawdown")
+            )
+            fig.add_trace(go.Scatter(x=dts, y=ec["port"], name="Strategy",
+                          line=dict(color="#2dd4bf", width=2.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=dts, y=ec["ndx"], name="NDX",
+                          line=dict(color="#fbbf24", width=1.5)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=dts, y=ec["voo"], name="VOO",
+                          line=dict(color="#94a3b8", width=1.5, dash="dot")), row=1, col=1)
+            fig.add_hline(y=0, line=dict(color="#6b7785", width=1, dash="dash"), row=1, col=1)
+            # drawdown area
+            fig.add_trace(go.Scatter(x=dts, y=ec["drawdown"], name="Drawdown",
+                          line=dict(color="#9b2226", width=1.5), fill="tozeroy",
+                          fillcolor="rgba(155,34,38,0.18)", showlegend=False), row=2, col=1)
+            # mark the max drawdown point
+            if ec.get("max_dd_date"):
+                fig.add_vline(x=pd.Timestamp(ec["max_dd_date"]), line=dict(color="#9b2226", width=1, dash="dot"), row=2, col=1)
+            fig.update_layout(height=560, margin=dict(l=10, r=10, t=40, b=10),
+                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                              font=dict(color="#c9d4e0"), legend=dict(orientation="h", y=1.08, x=0),
+                              hovermode="x unified")
+            fig.update_yaxes(title_text="Return (%)", gridcolor="rgba(120,130,140,0.12)", row=1, col=1)
+            fig.update_yaxes(title_text="Drawdown (%)", gridcolor="rgba(120,130,140,0.12)", row=2, col=1)
+            fig.update_xaxes(gridcolor="rgba(120,130,140,0.12)", row=2, col=1)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # drawdown + risk metric strip
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Max Drawdown", f"{ec['max_dd']:.1f}%",
+                      help=f"Largest peak-to-trough decline. Peak {ec.get('peak_date','?')} → trough {ec.get('max_dd_date','?')}.")
+            if ec.get("rec_date"):
+                d2.metric("Recovered", ec["rec_date"], help="Date the strategy regained its prior peak.")
+            else:
+                d2.metric("Recovered", "Not yet", help="Strategy has not regained its pre-drawdown peak.")
+            d3.metric("Annualized Vol", f"{ec['ann_vol']:.1f}%", help="Annualized daily-return volatility since inception.")
+            # active vs NDX
+            if ec.get("ndx_total") is not None:
+                act = ec["port_total"] - ec["ndx_total"]
+                d4.metric("Active vs NDX", f"{act:+.1f}%", help="Strategy total return minus NDX over the same window.")
+
+            st.caption(f"Strategy {ec['port_total']:+.1f}% · NDX {ec.get('ndx_total','n/a')}% · "
+                       f"VOO {ec.get('voo_total','n/a')}% since {AI_STRATEGY_INCEPTION}. "
+                       "Model curve: target weights × each holding's price path, cash held flat, all indexed to 100 at inception. "
+                       "Computed live from current holdings, so editing weights on the Manage tab updates this chart.")
+
     # ---------------- MANAGE ----------------
     with ai_tabs[2]:
-        st.subheader("Manage Portfolio")
-        st.caption("Add, edit, or remove holdings. Changes persist across app restarts. Use Reset to revert to the original 30-holding model.")
+        st.subheader("Manage Portfolio & Bench")
+        st.caption("Add or remove names, edit weights/scores, upload a CSV to replace the full list, or download the current list. Changes persist across app restarts. Use Reset to revert to the original 30-holding model.")
 
-        holdings = ai_load_portfolio()
+        # choose which list to manage
+        manage_target = st.radio("Editing", ["Portfolio", "Bench"], horizontal=True, key="ai_manage_target")
+        editing_bench = manage_target == "Bench"
 
-        # editable table
-        edit_df = pd.DataFrame(holdings)[['ticker', 'name', 'tier', 'score', 'target_weight', 'conviction_date', 'thesis']]
-        edited = st.data_editor(
-            edit_df,
-            use_container_width=True,
-            num_rows="dynamic",
-            height=500,
-            column_config={
-                "ticker": st.column_config.TextColumn("Ticker", required=True, width="small"),
-                "name": st.column_config.TextColumn("Name"),
-                "tier": st.column_config.SelectboxColumn("Tier", options=["HYPER", "TIER 1", "TIER 2", "TIER 3"]),
-                "score": st.column_config.NumberColumn("Score", min_value=0.0, max_value=10.0, step=0.1, format="%.1f"),
-                "target_weight": st.column_config.NumberColumn("Target %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f"),
-                "conviction_date": st.column_config.TextColumn("Conv. Date", width="small"),
-                "thesis": st.column_config.TextColumn("Thesis", width="large"),
-            },
-            key="ai_editor",
-        )
+        # ---- CSV upload (replaces the active list) ----
+        with st.expander("📤 Upload CSV to replace the current list", expanded=False):
+            st.caption(
+                "Columns recognized (header row required, case-insensitive): "
+                "**ticker, name, tier, score, target_weight** (portfolio) or **ticker, name, tier, score, note** (bench). "
+                "Extra columns are ignored. Tier accepts HYPER / TIER 1 / TIER 2 / TIER 3. "
+                "Uploading replaces the entire active list, so download a backup first if needed."
+            )
+            up = st.file_uploader("Choose CSV", type=["csv"], key="ai_csv_upload")
+            if up is not None:
+                try:
+                    up_df = pd.read_csv(up)
+                    up_df.columns = [c.strip().lower() for c in up_df.columns]
+                    if "ticker" not in up_df.columns:
+                        st.error("CSV must include a 'ticker' column.")
+                    else:
+                        recs = []
+                        for _, r in up_df.iterrows():
+                            tk = str(r.get("ticker", "")).strip().upper()
+                            if not tk or tk == "NAN":
+                                continue
+                            tier_val = str(r.get("tier", "TIER 2")).strip().upper().replace("HYPERSCALER", "HYPER")
+                            if tier_val not in ("HYPER", "TIER 1", "TIER 2", "TIER 3"):
+                                tier_val = "TIER 2"
+                            rec = {
+                                "ticker": tk,
+                                "name": str(r.get("name", tk)).strip() if not pd.isna(r.get("name", tk)) else tk,
+                                "tier": tier_val,
+                                "score": float(r["score"]) if "score" in up_df.columns and not pd.isna(r.get("score")) else 0.0,
+                            }
+                            if editing_bench:
+                                rec["note"] = str(r.get("note", "")).strip() if not pd.isna(r.get("note", "")) else ""
+                            else:
+                                rec["target_weight"] = float(r["target_weight"]) if "target_weight" in up_df.columns and not pd.isna(r.get("target_weight")) else 0.0
+                                rec["conviction_date"] = str(r.get("conviction_date", "")).strip() if not pd.isna(r.get("conviction_date", "")) else ""
+                                rec["thesis"] = str(r.get("thesis", "")).strip() if not pd.isna(r.get("thesis", "")) else ""
+                            recs.append(rec)
+                        if not recs:
+                            st.warning("No valid rows found in the CSV.")
+                        else:
+                            st.success(f"Parsed {len(recs)} names. Click below to apply.")
+                            if st.button(f"✅ Replace {manage_target} with uploaded list", type="primary", key="ai_apply_csv"):
+                                if editing_bench:
+                                    ai_save_bench(recs)
+                                else:
+                                    ai_save_portfolio(recs)
+                                st.cache_data.clear()
+                                st.success(f"Replaced {manage_target.lower()} with {len(recs)} names from CSV.")
+                                st.rerun()
+                except Exception as e:
+                    st.error(f"Could not read CSV: {e}")
 
-        total_w = edited['target_weight'].fillna(0).sum()
-        wcol1, wcol2 = st.columns([1, 3])
-        wcol1.metric("Total Weight", f"{total_w:.1f}%")
-        if total_w > 100:
-            wcol2.error(f"Weights sum to {total_w:.1f}%, over 100%. Trim before saving.")
-        elif total_w < 98:
-            wcol2.warning(f"Weights sum to {total_w:.1f}%. Remainder ({100-total_w:.1f}%) is treated as cash.")
+        # ---- quick add-a-name form ----
+        with st.expander("➕ Add a single name", expanded=False):
+            ac1, ac2, ac3 = st.columns(3)
+            with ac1:
+                add_tk = st.text_input("Ticker", key="ai_add_tk", placeholder="PLTR")
+                add_tier = st.selectbox("Tier", ["HYPER", "TIER 1", "TIER 2", "TIER 3"], index=2, key="ai_add_tier")
+            with ac2:
+                add_name = st.text_input("Name", key="ai_add_name", placeholder="Palantir")
+                add_score = st.number_input("Score", 0.0, 10.0, 5.0, 0.1, key="ai_add_score")
+            with ac3:
+                if editing_bench:
+                    add_note = st.text_input("Note", key="ai_add_note", placeholder="Why watching / trigger to add")
+                    add_weight = 0.0
+                else:
+                    add_weight = st.number_input("Target Weight %", 0.0, 100.0, 2.0, 0.5, key="ai_add_weight")
+                    add_note = ""
+            if st.button(f"➕ Add to {manage_target}", key="ai_add_btn"):
+                tk = add_tk.strip().upper()
+                if not tk:
+                    st.error("Ticker required.")
+                else:
+                    if editing_bench:
+                        cur = ai_load_bench()
+                        if any(b["ticker"] == tk for b in cur):
+                            st.warning(f"{tk} already on the bench.")
+                        else:
+                            cur.append({"ticker": tk, "name": add_name.strip() or tk, "tier": add_tier, "score": add_score, "note": add_note})
+                            ai_save_bench(cur)
+                            st.cache_data.clear(); st.success(f"Added {tk} to bench."); st.rerun()
+                    else:
+                        cur = ai_load_portfolio()
+                        if any(h["ticker"] == tk for h in cur):
+                            st.warning(f"{tk} already in the portfolio.")
+                        else:
+                            cur.append({"ticker": tk, "name": add_name.strip() or tk, "tier": add_tier, "score": add_score,
+                                        "target_weight": add_weight, "conviction_date": "", "thesis": ""})
+                            ai_save_portfolio(cur)
+                            st.cache_data.clear(); st.success(f"Added {tk} to portfolio."); st.rerun()
+
+        st.divider()
+
+        # ---- editable table for the chosen list ----
+        if editing_bench:
+            bench_list = ai_load_bench()
+            edit_df = pd.DataFrame(bench_list)[['ticker', 'name', 'tier', 'score', 'note']]
+            edited = st.data_editor(
+                edit_df, use_container_width=True, num_rows="dynamic", height=520,
+                column_config={
+                    "ticker": st.column_config.TextColumn("Ticker", required=True, width="small"),
+                    "name": st.column_config.TextColumn("Name"),
+                    "tier": st.column_config.SelectboxColumn("Tier", options=["HYPER", "TIER 1", "TIER 2", "TIER 3"]),
+                    "score": st.column_config.NumberColumn("Score", min_value=0.0, max_value=10.0, step=0.1, format="%.1f"),
+                    "note": st.column_config.TextColumn("Note", width="large"),
+                },
+                key="ai_bench_editor",
+            )
+            bb1, bb2, bb3 = st.columns([1, 1, 2])
+            with bb1:
+                if st.button("💾 Save Bench", type="primary", use_container_width=True):
+                    nb = [b for b in edited.to_dict('records') if b.get('ticker') and str(b['ticker']).strip()]
+                    for b in nb:
+                        b['ticker'] = str(b['ticker']).strip().upper()
+                    ai_save_bench(nb)
+                    st.cache_data.clear(); st.success(f"Saved {len(nb)} bench names."); st.rerun()
+            with bb2:
+                if st.button("↩️ Reset Bench", use_container_width=True):
+                    ai_reset_bench()
+                    st.cache_data.clear(); st.success("Bench reverted to default."); st.rerun()
+            with bb3:
+                st.download_button("⬇️ Export Bench CSV", edited.to_csv(index=False), "ai_bench.csv", "text/csv", use_container_width=True)
+
         else:
-            wcol2.success(f"Weights sum to {total_w:.1f}%. Within range.")
+            holdings = ai_load_portfolio()
+            edit_df = pd.DataFrame(holdings)[['ticker', 'name', 'tier', 'score', 'target_weight', 'conviction_date', 'thesis']]
+            edited = st.data_editor(
+                edit_df, use_container_width=True, num_rows="dynamic", height=500,
+                column_config={
+                    "ticker": st.column_config.TextColumn("Ticker", required=True, width="small"),
+                    "name": st.column_config.TextColumn("Name"),
+                    "tier": st.column_config.SelectboxColumn("Tier", options=["HYPER", "TIER 1", "TIER 2", "TIER 3"]),
+                    "score": st.column_config.NumberColumn("Score", min_value=0.0, max_value=10.0, step=0.1, format="%.1f"),
+                    "target_weight": st.column_config.NumberColumn("Target %", min_value=0.0, max_value=100.0, step=0.5, format="%.1f"),
+                    "conviction_date": st.column_config.TextColumn("Conv. Date", width="small"),
+                    "thesis": st.column_config.TextColumn("Thesis", width="large"),
+                },
+                key="ai_editor",
+            )
 
-        bcol1, bcol2, bcol3 = st.columns([1, 1, 2])
-        with bcol1:
-            if st.button("💾 Save Changes", type="primary", use_container_width=True):
-                new_holdings = edited.to_dict('records')
-                # clean: drop rows with no ticker
-                new_holdings = [h for h in new_holdings if h.get('ticker') and str(h['ticker']).strip()]
-                for h in new_holdings:
-                    h['ticker'] = str(h['ticker']).strip().upper()
-                if ai_save_portfolio(new_holdings):
+            total_w = edited['target_weight'].fillna(0).sum()
+            wcol1, wcol2 = st.columns([1, 3])
+            wcol1.metric("Total Weight", f"{total_w:.1f}%")
+            if total_w > 100:
+                wcol2.error(f"Weights sum to {total_w:.1f}%, over 100%. Trim before saving.")
+            elif total_w < 98:
+                wcol2.warning(f"Weights sum to {total_w:.1f}%. Remainder ({100-total_w:.1f}%) is treated as cash.")
+            else:
+                wcol2.success(f"Weights sum to {total_w:.1f}%. Within range.")
+
+            bcol1, bcol2, bcol3 = st.columns([1, 1, 2])
+            with bcol1:
+                if st.button("💾 Save Changes", type="primary", use_container_width=True):
+                    new_holdings = edited.to_dict('records')
+                    new_holdings = [h for h in new_holdings if h.get('ticker') and str(h['ticker']).strip()]
+                    for h in new_holdings:
+                        h['ticker'] = str(h['ticker']).strip().upper()
+                    if ai_save_portfolio(new_holdings):
+                        st.cache_data.clear()
+                        st.success(f"Saved {len(new_holdings)} holdings.")
+                        st.rerun()
+            with bcol2:
+                if st.button("↩️ Reset to Default", use_container_width=True):
+                    ai_reset_portfolio()
                     st.cache_data.clear()
-                    st.success(f"Saved {len(new_holdings)} holdings.")
+                    st.success("Reverted to the original 30-holding model.")
                     st.rerun()
-        with bcol2:
-            if st.button("↩️ Reset to Default", use_container_width=True):
-                ai_reset_portfolio()
-                st.cache_data.clear()
-                st.success("Reverted to the original 30-holding model.")
-                st.rerun()
-        with bcol3:
-            csv = edited.to_csv(index=False)
-            st.download_button("⬇️ Export CSV", csv, "ai_portfolio.csv", "text/csv", use_container_width=True)
+            with bcol3:
+                csv = edited.to_csv(index=False)
+                st.download_button("⬇️ Export CSV", csv, "ai_portfolio.csv", "text/csv", use_container_width=True)
 
     # ---------------- BENCH ----------------
     with ai_tabs[3]:
         st.subheader("Bench & Watch List")
-        st.caption("Names under consideration, not currently held. Live prices for monitoring.")
-        bench_tickers = [b['ticker'] for b in AI_BENCH]
+        st.caption("Names under consideration, not currently held. Live prices for monitoring. Edit the bench on the Manage tab (toggle to 'Bench').")
+        bench_list = ai_load_bench()
+        bench_tickers = [b['ticker'] for b in bench_list]
         with st.spinner("Fetching bench prices..."):
             bprices = ai_fetch_prices(tuple(bench_tickers), AI_STRATEGY_INCEPTION)
         brows = []
-        for b in AI_BENCH:
+        for b in bench_list:
             pr = bprices.get(b['ticker'], {})
             brows.append({
                 "Tier": b['tier'], "Ticker": b['ticker'], "Name": b['name'],
@@ -3248,7 +3988,16 @@ elif selected == "AI Strategy":
                 "Since Incept": f"{pr.get('ret_pct'):+.1f}%" if pr.get('ret_pct') is not None else "n/a",
                 "Note": b.get('note', ''),
             })
+        tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
+        brows.sort(key=lambda r: (tier_order.get(r["Tier"], 99), r["Ticker"]))
         st.dataframe(pd.DataFrame(brows), use_container_width=True, hide_index=True, height=560)
+
+        # bench equal-weight performance summary
+        rets = [bprices.get(b['ticker'], {}).get('ret_pct') for b in bench_list]
+        rets = [r for r in rets if r is not None]
+        if rets:
+            st.metric("Bench (equal-weight, since inception)", f"{sum(rets)/len(rets):+.1f}%",
+                      help="Simple average price return of all bench names since 2026-02-10. Compare against the Strategy figure on the Performance tab.")
 
     # ---------------- MANDATE ----------------
     with ai_tabs[4]:
@@ -3257,6 +4006,48 @@ elif selected == "AI Strategy":
     # ---------------- CONVICTION ----------------
     with ai_tabs[5]:
         st.markdown(AI_CONVICTION_MD)
+
+    # ---------------- FACT SHEET ----------------
+    with ai_tabs[6]:
+        st.subheader("Manager Fact Sheet")
+        st.caption("One-page institutional fact sheet generated from live holdings, weights, performance, and risk statistics. Download the HTML and print to PDF (Ctrl/Cmd-P → Save as PDF).")
+
+        holdings = ai_load_portfolio()
+        with st.spinner("Computing performance, risk statistics, and equity curve..."):
+            strat_ret, bench_ret, per = ai_compute_performance(holdings, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK)
+            hk = tuple((h['ticker'], h.get('target_weight') or 0) for h in holdings)
+            ec = ai_equity_curve(hk, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK, "VOO")
+            stats = ai_risk_stats(ec) if ec else {}
+
+        # live preview of the headline risk stats
+        st.markdown("##### Risk Statistics (live)")
+        if stats:
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Sharpe", stats.get("sharpe", "n/a"))
+            r2.metric("Std Dev (ann)", f"{stats.get('ann_vol','n/a')}%")
+            r3.metric("Max Drawdown", f"{stats.get('max_dd','n/a')}%")
+            r4.metric("Beta vs NDX", stats.get("beta", "n/a"))
+            r5, r6, r7, r8 = st.columns(4)
+            r5.metric("Sortino", stats.get("sortino", "n/a"))
+            r6.metric("Calmar", stats.get("calmar", "n/a"))
+            r7.metric("Alpha (ann)", f"{stats.get('alpha','n/a')}%")
+            r8.metric("Info Ratio", stats.get("info_ratio", "n/a"))
+        else:
+            st.warning("Could not compute risk statistics (price history unavailable). The fact sheet will still generate with performance and holdings data.")
+
+        as_of = datetime.now(ZoneInfo("US/Eastern")).strftime("%Y-%m-%d")
+        html = ai_build_factsheet_html(holdings, per, ec or {}, stats,
+                                       strat_ret if strat_ret is not None else 0.0,
+                                       bench_ret if bench_ret is not None else 0.0,
+                                       AI_STRATEGY_INCEPTION, as_of)
+
+        st.download_button(
+            "⬇️ Download Fact Sheet (HTML → print to PDF)",
+            html, f"AI_Infrastructure_Strategy_FactSheet_{as_of}.html",
+            "text/html", type="primary", use_container_width=True)
+
+        st.markdown("##### Preview")
+        st.components.v1.html(html, height=1100, scrolling=True)
 
 
 # ========================================
