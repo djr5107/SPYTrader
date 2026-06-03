@@ -488,74 +488,44 @@ def resolve_search_symbol(text_input, quick_pick, fallback):
     return fallback
 
 AI_ENTRY_TARGETS = {
-    "GOOGL": {"optimal": 353.72, "secondary": 368.93, "ceiling": 418.37, "pe_anchor": "~24x", "reval": False},
-    "AMZN": {"optimal": 254.4, "secondary": 263.87, "ceiling": 286.88, "pe_anchor": "~32x", "reval": False},
-    "META": {"optimal": 594.56, "secondary": 616.7, "ceiling": 670.46, "pe_anchor": "~24x", "reval": False},
-    "MSFT": {"optimal": 423.23, "secondary": 438.98, "ceiling": 477.25, "pe_anchor": "~31x", "reval": False},
-    "ORCL": {"optimal": 207.72, "secondary": 216.75, "ceiling": 234.81, "pe_anchor": "~26x", "reval": False},
-    "NVDA": {"optimal": 196.36, "secondary": 204.81, "ceiling": 232.25, "pe_anchor": "~34x", "reval": False},
-    "AVGO": {"optimal": 415.5, "secondary": 433.37, "ceiling": 491.45, "pe_anchor": "~38x", "reval": False},
-    "TSM": {"optimal": 389.16, "secondary": 405.9, "ceiling": 460.3, "pe_anchor": "~26x", "reval": False},
-    "MU": {"optimal": 893.32, "secondary": 932.16, "ceiling": 1009.84, "pe_anchor": "~18x", "reval": False},
-    "MRVL": {"optimal": 232.0, "secondary": 255.0, "ceiling": 300.0, "pe_anchor": "~40x FY28", "reval": True},
-    "AMD": {"optimal": 474.81, "secondary": 495.46, "ceiling": 536.74, "pe_anchor": "~32x", "reval": False},
-    "ANET": {"optimal": 149.9, "secondary": 155.48, "ceiling": 169.04, "pe_anchor": "~38x", "reval": False},
-    "DELL": {"optimal": 378.82, "secondary": 399.86, "ceiling": 433.54, "pe_anchor": "~14x", "reval": False},
-    "ARM": {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89, "pe_anchor": "~95x", "reval": True},
-    "VRT": {"optimal": 293.61, "secondary": 306.24, "ceiling": 347.28, "pe_anchor": "~50x", "reval": False},
-    "ETN": {"optimal": 376.56, "secondary": 390.59, "ceiling": 424.64, "pe_anchor": "~30x", "reval": False},
-    "ASML": {"optimal": 1499.87, "secondary": 1564.38, "ceiling": 1774.04, "pe_anchor": "~32x", "reval": False},
-    "APH": {"optimal": 139.83, "secondary": 145.04, "ceiling": 157.69, "pe_anchor": "~38x", "reval": False},
-    "AMAT": {"optimal": 423.06, "secondary": 438.81, "ceiling": 477.06, "pe_anchor": "~26x", "reval": False},
-    "PANW": {"optimal": 264.84, "secondary": 274.71, "ceiling": 298.66, "pe_anchor": "~48x", "reval": True},
-    "TT": {"optimal": 424.22, "secondary": 440.02, "ceiling": 478.38, "pe_anchor": "~30x", "reval": False},
-    "CSCO": {"optimal": 111.99, "secondary": 116.81, "ceiling": 124.03, "pe_anchor": "~17x", "reval": False},
-    "VST": {"optimal": 149.01, "secondary": 155.42, "ceiling": 176.25, "pe_anchor": "~22x", "reval": False},
-    "CEG": {"optimal": 267.61, "secondary": 279.12, "ceiling": 316.53, "pe_anchor": "~28x", "reval": False},
-    "GEV": {"optimal": 900.54, "secondary": 939.27, "ceiling": 1065.15, "pe_anchor": "~45x", "reval": False},
-    "PWR": {"optimal": 669.03, "secondary": 693.94, "ceiling": 754.43, "pe_anchor": "~38x", "reval": False},
-    "CCJ": {"optimal": 105.94, "secondary": 109.88, "ceiling": 119.46, "pe_anchor": "n/a", "reval": False},
-    "NEE": {"optimal": 81.79, "secondary": 84.83, "ceiling": 92.23, "pe_anchor": "~20x", "reval": False},
-    "CAT": {"optimal": 814.56, "secondary": 849.59, "ceiling": 902.15, "pe_anchor": "~20x", "reval": False},
-    "FSLR": {"optimal": 285.31, "secondary": 297.59, "ceiling": 315.99, "pe_anchor": "~12x", "reval": False},
-}
-
-AI_BENCH_TARGETS = {
-    "LITE": {"optimal": 895.0, "secondary": 931.0, "ceiling": 1067.0},
-    "COHR": {"optimal": 108.56, "secondary": 113.28, "ceiling": 127.44},
-    "FN": {"optimal": 395.6, "secondary": 413.0, "ceiling": 464.4},
-    "ARM": {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89},
-    "QCOM": {"optimal": 235.96, "secondary": 245.0, "ceiling": 271.1},
-    "INTC": {"optimal": 104.36, "secondary": 110.1, "ceiling": 120.41},
-    "CRWV": {"optimal": 98.58, "secondary": 103.0, "ceiling": 120.48},
-    "ON": {"optimal": 111.57, "secondary": 116.0, "ceiling": 130.27},
-    "SNPS": {"optimal": 442.33, "secondary": 461.35, "ceiling": 513.67},
-    "LRCX": {"optimal": 295.91, "secondary": 308.63, "ceiling": 343.63},
-    "GLW": {"optimal": 168.48, "secondary": 175.73, "ceiling": 195.65},
-    "SKHHY": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "SSNLF": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "SNDK": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "WDC": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "OKLO": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "SMR": {"optimal": 11.51, "secondary": 12.04, "ceiling": 13.69},
+    "GOOGL": {"optimal": 353.72, "secondary": 368.93, "ceiling": 418.37},
+    "AMZN":  {"optimal": 254.40, "secondary": 263.87, "ceiling": 286.88},
+    "META":  {"optimal": 594.56, "secondary": 616.70, "ceiling": 670.46},
+    "MSFT":  {"optimal": 423.23, "secondary": 438.98, "ceiling": 477.25},
+    "ORCL":  {"optimal": 207.72, "secondary": 216.75, "ceiling": 234.81},
+    "NVDA":  {"optimal": 196.36, "secondary": 204.81, "ceiling": 232.25},
+    "AVGO":  {"optimal": 415.50, "secondary": 433.37, "ceiling": 491.45},
+    "TSM":   {"optimal": 389.16, "secondary": 405.90, "ceiling": 460.30},
+    "MU":    {"optimal": 893.32, "secondary": 932.16, "ceiling": 1009.84},
+    "MRVL":  {"optimal": 188.60, "secondary": 196.80, "ceiling": 213.20},
+    "AMD":   {"optimal": 474.81, "secondary": 495.46, "ceiling": 536.74},
+    "ANET":  {"optimal": 149.90, "secondary": 155.48, "ceiling": 169.04},
+    "DELL":  {"optimal": 378.82, "secondary": 399.86, "ceiling": 433.54},
+    "ARM":   {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89},
+    "VRT":   {"optimal": 293.61, "secondary": 306.24, "ceiling": 347.28},
+    "ETN":   {"optimal": 376.56, "secondary": 390.59, "ceiling": 424.64},
+    "ASML":  {"optimal": 1499.87, "secondary": 1564.38, "ceiling": 1774.04},
+    "APH":   {"optimal": 139.83, "secondary": 145.04, "ceiling": 157.69},
+    "AMAT":  {"optimal": 423.06, "secondary": 438.81, "ceiling": 477.06},
+    "PANW":  {"optimal": 264.84, "secondary": 274.71, "ceiling": 298.66},
+    "TT":    {"optimal": 424.22, "secondary": 440.02, "ceiling": 478.38},
+    "CSCO":  {"optimal": 111.99, "secondary": 116.81, "ceiling": 124.03},
+    "VST":   {"optimal": 149.01, "secondary": 155.42, "ceiling": 176.25},
+    "CEG":   {"optimal": 267.61, "secondary": 279.12, "ceiling": 316.53},
+    "GEV":   {"optimal": 900.54, "secondary": 939.27, "ceiling": 1065.15},
+    "PWR":   {"optimal": 669.03, "secondary": 693.94, "ceiling": 754.43},
+    "CCJ":   {"optimal": 105.94, "secondary": 109.88, "ceiling": 119.46},
+    "NEE":   {"optimal": 81.79, "secondary": 84.83, "ceiling": 92.23},
+    "CAT":   {"optimal": 814.56, "secondary": 849.59, "ceiling": 902.15},
+    "FSLR":  {"optimal": 285.31, "secondary": 297.59, "ceiling": 315.99},
 }
 
 def ai_entry_zone(ticker, price_now):
     """Classify where the live price sits vs the entry targets.
-    Returns (zone_label, target_dict_or_None).
-
-    Re-rate handling: names flagged reval=True (a recent earnings/guidance event
-    obsoleted the static levels) return a 'RE-RATE — refresh' status rather than a
-    stale 🔴. Also, if the live price has run more than 12% past the ceiling, the
-    targets are treated as stale and flagged for re-derivation regardless of reval."""
+    Returns (zone_label, target_dict_or_None)."""
     t = AI_ENTRY_TARGETS.get(ticker)
     if not t or price_now is None:
         return ("—", t)
-    if t.get("reval"):
-        return ("🔄 RE-RATE — refresh", t)
-    # stale guard: price gapped well past the ceiling => targets likely obsolete
-    if price_now > t["ceiling"] * 1.12:
-        return ("🔄 Stale — re-derive", t)
     if price_now <= t["optimal"]:
         return ("🟢 At/below optimal", t)
     if price_now <= t["secondary"]:
@@ -564,20 +534,151 @@ def ai_entry_zone(ticker, price_now):
         return ("🟡 Below ceiling", t)
     return ("🔴 Above ceiling", t)
 
+# Fetch market data
+@st.cache_data(ttl=60)
+def fetch_market_data():
+    data = {}
+    for ticker in TICKERS:
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="2d", interval="1d")
+            
+            if len(hist) >= 2:
+                current_price = hist['Close'].iloc[-1]
+                prev_close = hist['Close'].iloc[-2]
+                change = current_price - prev_close
+                change_pct = (change / prev_close) * 100
+                
+                data[ticker] = {
+                    'price': current_price,
+                    'change': change,
+                    'change_pct': change_pct,
+                    'volume': hist['Volume'].iloc[-1]
+                }
+            else:
+                data[ticker] = {'price': 0, 'change': 0, 'change_pct': 0, 'volume': 0}
+        except:
+            data[ticker] = {'price': 0, 'change': 0, 'change_pct': 0, 'volume': 0}
+    
+    return data
 
-def ai_bench_zone(ticker, price_now):
-    """Entry zone for a BENCH name (tracking only). Returns (label, target|None).
-    Bench names with no price data (e.g. Korea-listed OTC) return ('—', None)."""
-    t = AI_BENCH_TARGETS.get(ticker)
-    if not t or price_now is None or t.get("ceiling", 0) <= 0:
-        return ("—", t if t and t.get("ceiling", 0) > 0 else None)
-    if price_now <= t["optimal"]:
-        return ("🟢 At/below optimal", t)
-    if price_now <= t["secondary"]:
-        return ("🟢 Buy zone", t)
-    if price_now <= t["ceiling"]:
-        return ("🟡 Below ceiling", t)
-    return ("🔴 Above ceiling", t)
+market_data = fetch_market_data()
+
+# Calculate technical indicators
+@st.cache_data(ttl=300)
+def calculate_technical_indicators(df, periods=[10, 20, 50, 100, 200]):
+    """Calculate comprehensive technical indicators"""
+    if df.empty or len(df) < 20:
+        return df
+    
+    df = df.copy()
+    
+    # SMAs
+    for period in periods:
+        if len(df) >= period:
+            df[f'SMA_{period}'] = df['Close'].rolling(window=period).mean()
+    
+    # RSI
+    if len(df) >= 14:
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    if len(df) >= 26:
+        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    # ADX
+    if len(df) >= 14:
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+        
+        plus_dm = high.diff()
+        minus_dm = low.diff()
+        plus_dm[plus_dm < 0] = 0
+        minus_dm[minus_dm > 0] = 0
+        
+        tr1 = pd.DataFrame(high - low)
+        tr2 = pd.DataFrame(abs(high - close.shift(1)))
+        tr3 = pd.DataFrame(abs(low - close.shift(1)))
+        frames = [tr1, tr2, tr3]
+        tr = pd.concat(frames, axis=1, join='inner').max(axis=1)
+        atr = tr.rolling(14).mean()
+        
+        plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / atr)
+        minus_di = abs(100 * (minus_dm.ewm(alpha=1/14).mean() / atr))
+        dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
+        df['ADX'] = dx.ewm(alpha=1/14).mean()
+        df['ATR'] = atr
+    
+    # Stochastic
+    if len(df) >= 14:
+        low_min = df['Low'].rolling(window=14).min()
+        high_max = df['High'].rolling(window=14).max()
+        df['Stoch_%K'] = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+        df['Stoch_%D'] = df['Stoch_%K'].rolling(window=3).mean()
+    
+    # Volume ratio
+    if len(df) >= 20:
+        df['Volume_Avg'] = df['Volume'].rolling(window=20).mean()
+        df['Volume_Ratio'] = df['Volume'] / df['Volume_Avg']
+    
+    # Bollinger Bands
+    if len(df) >= 20:
+        sma_20 = df['Close'].rolling(window=20).mean()
+        std_20 = df['Close'].rolling(window=20).std()
+        df['BB_Upper'] = sma_20 + (std_20 * 2)
+        df['BB_Lower'] = sma_20 - (std_20 * 2)
+        df['BB_Middle'] = sma_20
+        df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / sma_20
+    
+    # Support and Resistance levels (pivot points)
+    if len(df) >= 5:
+        df['Pivot'] = (df['High'] + df['Low'] + df['Close']) / 3
+        df['R1'] = 2 * df['Pivot'] - df['Low']
+        df['S1'] = 2 * df['Pivot'] - df['High']
+        df['R2'] = df['Pivot'] + (df['High'] - df['Low'])
+        df['S2'] = df['Pivot'] - (df['High'] - df['Low'])
+    
+    return df
+
+# Logging functions
+def log_trade(ts, typ, sym, action, size, entry, exit, pnl, status, sig_id, 
+               entry_numeric=None, exit_numeric=None, pnl_numeric=None, dte=None,
+               strategy=None, thesis=None, max_hold=None, actual_hold=None, 
+               conviction=None, signal_type=None):
+    """Log a trade to the trade log"""
+    new_row = pd.DataFrame([{
+        'Timestamp': ts,
+        'Type': typ,
+        'Symbol': sym,
+        'Action': action,
+        'Size': size,
+        'Entry': entry,
+        'Exit': exit,
+        'P&L': pnl,
+        'Status': status,
+        'Signal ID': sig_id,
+        'Entry Price Numeric': entry_numeric,
+        'Exit Price Numeric': exit_numeric,
+        'P&L Numeric': pnl_numeric,
+        'DTE': dte,
+        'Strategy': strategy,
+        'Thesis': thesis,
+        'Max Hold Minutes': max_hold,
+        'Actual Hold Minutes': actual_hold,
+        'Conviction': conviction,
+        'Signal Type': signal_type
+    }])
+    
+    st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_row], ignore_index=True)
+    save_json(TRADE_LOG_FILE, st.session_state.trade_log.to_dict('records'))
 
 def expire_old_signals():
     """Move expired signals from queue to history"""
@@ -1517,84 +1618,70 @@ def ai_equity_curve(holdings_key, inception, benchmark="^NDX", extra_bench="VOO"
 def ai_risk_stats(ec, rf_annual=0.043):
     """Derive risk statistics from the equity-curve dict produced by
     ai_equity_curve(). Returns a dict of fact-sheet metrics. All derived from
-    the daily MODEL curve, so they describe the strategy allocation, not fills.
-
-    Computes the benchmark-relative stats (beta, alpha, tracking error, info
-    ratio, up/down capture, correlation) against BOTH the NDX (primary benchmark)
-    and the S&P 500 via VOO (the barometer most investors anchor to). S&P-relative
-    figures are suffixed _sp."""
+    the daily MODEL curve, so they describe the strategy allocation, not fills."""
     import numpy as _np
     stats = {}
     port = ec.get("port") or []
     ndx = ec.get("ndx") or []
-    voo = ec.get("voo") or []
     if len(port) < 5:
         return stats
+    # rebuild daily levels from cumulative % to compute daily returns
     lvl = _np.array([1 + p / 100 for p in port], dtype=float)
     rets = _np.diff(lvl) / lvl[:-1]
+    # benchmark daily returns (align lengths)
+    bret = None
+    nlvl = None
+    if ndx and len([x for x in ndx if x is not None]) >= 5:
+        nlvl = _np.array([1 + (x or 0) / 100 for x in ndx], dtype=float)
+        bret = _np.diff(nlvl) / nlvl[:-1]
     ann = 252
     mean_d = rets.mean()
     std_d = rets.std(ddof=1)
-    ann_ret_geo = (lvl[-1] / lvl[0]) ** (ann / len(rets)) - 1
+    ann_ret_geo = (lvl[-1] / lvl[0]) ** (ann / len(rets)) - 1   # annualized (geometric)
     ann_vol = std_d * _np.sqrt(ann)
     rf_d = (1 + rf_annual) ** (1 / ann) - 1
     sharpe = ((mean_d - rf_d) / std_d * _np.sqrt(ann)) if std_d > 0 else None
     downside = rets[rets < 0]
     sortino = ((mean_d - rf_d) / downside.std(ddof=1) * _np.sqrt(ann)) if len(downside) > 1 and downside.std(ddof=1) > 0 else None
+    # drawdown already in ec
     max_dd = ec.get("max_dd")
     calmar = (ann_ret_geo * 100 / abs(max_dd)) if max_dd else None
-
-    def _vs_benchmark(bcum):
-        """beta, alpha, TE, IR, up/down capture, correlation vs a cumulative-% series."""
-        out = dict(beta=None, alpha=None, te=None, ir=None, up=None, down=None, corr=None)
-        vals = [x for x in bcum if x is not None]
-        if len(vals) < 5:
-            return out
-        blvl = _np.array([1 + (x or 0) / 100 for x in bcum], dtype=float)
-        bret = _np.diff(blvl) / blvl[:-1]
-        if len(bret) != len(rets):
-            return out
+    # beta / alpha / tracking error / IR vs NDX
+    beta = alpha = te = ir = up_capture = down_capture = corr = None
+    if bret is not None and len(bret) == len(rets):
         cov = _np.cov(rets, bret)
         if cov[1, 1] > 0:
-            out["beta"] = cov[0, 1] / cov[1, 1]
-        out["corr"] = _np.corrcoef(rets, bret)[0, 1]
+            beta = cov[0, 1] / cov[1, 1]
+        corr = _np.corrcoef(rets, bret)[0, 1]
         active = rets - bret
         te = active.std(ddof=1) * _np.sqrt(ann)
-        out["te"] = te
-        out["ir"] = (active.mean() * ann) / te if te > 0 else None
-        b_ann_geo = (blvl[-1] / blvl[0]) ** (ann / len(bret)) - 1
-        if out["beta"] is not None:
-            out["alpha"] = (ann_ret_geo - rf_annual) - out["beta"] * (b_ann_geo - rf_annual)
-        up = bret > 0; dn = bret < 0
+        ir = (active.mean() * ann) / te if te > 0 else None
+        b_ann_geo = (nlvl[-1] / nlvl[0]) ** (ann / len(bret)) - 1
+        rf_ann = rf_annual
+        if beta is not None:
+            alpha = (ann_ret_geo - rf_ann) - beta * (b_ann_geo - rf_ann)
+        up = bret > 0
+        dn = bret < 0
         if up.sum() > 0 and bret[up].sum() != 0:
-            out["up"] = rets[up].sum() / bret[up].sum() * 100
+            up_capture = rets[up].sum() / bret[up].sum() * 100
         if dn.sum() > 0 and bret[dn].sum() != 0:
-            out["down"] = rets[dn].sum() / bret[dn].sum() * 100
-        return out
-
-    n = _vs_benchmark(ndx)   # vs NDX
-    s = _vs_benchmark(voo)   # vs S&P 500 (VOO)
+            down_capture = rets[dn].sum() / bret[dn].sum() * 100
     pos = (rets > 0).sum()
     win_rate = pos / len(rets) * 100
-
-    def r2(x, m=1): return round(x * m, 2) if x is not None else None
     stats.update({
         "ann_return": round(ann_ret_geo * 100, 2),
         "ann_vol": round(ann_vol * 100, 2),
-        "sharpe": r2(sharpe), "sortino": r2(sortino), "calmar": r2(calmar),
+        "sharpe": round(sharpe, 2) if sharpe is not None else None,
+        "sortino": round(sortino, 2) if sortino is not None else None,
+        "calmar": round(calmar, 2) if calmar is not None else None,
         "max_dd": max_dd,
-        # vs NDX (primary)
-        "beta": r2(n["beta"]), "alpha": r2(n["alpha"], 100),
-        "tracking_error": r2(n["te"], 100), "info_ratio": r2(n["ir"]),
-        "up_capture": round(n["up"], 1) if n["up"] is not None else None,
-        "down_capture": round(n["down"], 1) if n["down"] is not None else None,
-        "correlation": r2(n["corr"]),
-        # vs S&P 500 (VOO) — the equity barometer
-        "beta_sp": r2(s["beta"]), "alpha_sp": r2(s["alpha"], 100),
-        "tracking_error_sp": r2(s["te"], 100), "info_ratio_sp": r2(s["ir"]),
-        "up_capture_sp": round(s["up"], 1) if s["up"] is not None else None,
-        "down_capture_sp": round(s["down"], 1) if s["down"] is not None else None,
-        "correlation_sp": r2(s["corr"]),
+        "beta": round(beta, 2) if beta is not None else None,
+        "alpha": round(alpha * 100, 2) if alpha is not None else None,
+        "tracking_error": round(te * 100, 2) if te is not None else None,
+        "info_ratio": round(ir, 2) if ir is not None else None,
+        "up_capture": round(up_capture, 1) if up_capture is not None else None,
+        "down_capture": round(down_capture, 1) if down_capture is not None else None,
+        "correlation": round(corr, 2) if corr is not None else None,
         "win_rate": round(win_rate, 1),
         "n_days": len(rets) + 1,
     })
@@ -1643,7 +1730,6 @@ def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
         perf_rows += f"<tr><td>S&amp;P 500 (VOO)</td><td class='r'>{pct(ec['voo_total'])}</td></tr>"
 
     def stat(v, suf=""): return f"{v}{suf}" if v is not None else "n/a"
-    # Portfolio-level (benchmark-agnostic) stats
     risk_rows = (
         f"<tr><td>Annualized return</td><td class='r'>{stat(stats.get('ann_return'),'%')}</td></tr>"
         f"<tr><td>Annualized volatility (std dev)</td><td class='r'>{stat(stats.get('ann_vol'),'%')}</td></tr>"
@@ -1651,18 +1737,12 @@ def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
         f"<tr><td>Sortino ratio</td><td class='r'>{stat(stats.get('sortino'))}</td></tr>"
         f"<tr><td>Max drawdown</td><td class='r neg'>{stat(stats.get('max_dd'),'%')}</td></tr>"
         f"<tr><td>Calmar ratio</td><td class='r'>{stat(stats.get('calmar'))}</td></tr>"
-        f"<tr><td>Win rate (daily)</td><td class='r'>{stat(stats.get('win_rate'),'%')}</td></tr>"
-    )
-    # Two-benchmark relative stats: NDX (primary) and S&P 500 via VOO (the equity barometer)
-    bench_rows = (
-        "<tr><th>Metric</th><th class='r'>vs NDX</th><th class='r'>vs S&amp;P 500</th></tr>"
-        f"<tr><td>Beta</td><td class='r'><strong>{stat(stats.get('beta'))}</strong></td><td class='r'><strong>{stat(stats.get('beta_sp'))}</strong></td></tr>"
-        f"<tr><td>Alpha (annualized)</td><td class='r'>{stat(stats.get('alpha'),'%')}</td><td class='r'>{stat(stats.get('alpha_sp'),'%')}</td></tr>"
-        f"<tr><td>Correlation</td><td class='r'>{stat(stats.get('correlation'))}</td><td class='r'>{stat(stats.get('correlation_sp'))}</td></tr>"
-        f"<tr><td>Tracking error</td><td class='r'>{stat(stats.get('tracking_error'),'%')}</td><td class='r'>{stat(stats.get('tracking_error_sp'),'%')}</td></tr>"
-        f"<tr><td>Information ratio</td><td class='r'>{stat(stats.get('info_ratio'))}</td><td class='r'>{stat(stats.get('info_ratio_sp'))}</td></tr>"
-        f"<tr><td>Up capture</td><td class='r'>{stat(stats.get('up_capture'),'%')}</td><td class='r'>{stat(stats.get('up_capture_sp'),'%')}</td></tr>"
-        f"<tr><td>Down capture</td><td class='r'>{stat(stats.get('down_capture'),'%')}</td><td class='r'>{stat(stats.get('down_capture_sp'),'%')}</td></tr>"
+        f"<tr><td>Beta vs NDX</td><td class='r'>{stat(stats.get('beta'))}</td></tr>"
+        f"<tr><td>Alpha (annualized)</td><td class='r'>{stat(stats.get('alpha'),'%')}</td></tr>"
+        f"<tr><td>Tracking error</td><td class='r'>{stat(stats.get('tracking_error'),'%')}</td></tr>"
+        f"<tr><td>Information ratio</td><td class='r'>{stat(stats.get('info_ratio'))}</td></tr>"
+        f"<tr><td>Up / down capture</td><td class='r'>{stat(stats.get('up_capture'),'%')} / {stat(stats.get('down_capture'),'%')}</td></tr>"
+        f"<tr><td>Correlation to NDX</td><td class='r'>{stat(stats.get('correlation'))}</td></tr>"
     )
 
     # sparkline points (cumulative return) as inline SVG polyline
@@ -1744,9 +1824,7 @@ def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
   <div>
     <h2>Risk Statistics</h2>
     <table>{risk_rows}</table>
-    <h2 style='margin-top:12px'>Benchmark-Relative (vs NDX &amp; S&amp;P 500)</h2>
-    <table>{bench_rows}</table>
-    <div class='narr' style='font-size:.66rem;color:#8a93a3'>Annualized from daily model returns over {stats.get('n_days','?')} trading days. Risk-free 4.3%. Beta vs the S&amp;P 500 is the barometer most investors anchor to; beta vs NDX is the strategy's stated benchmark.</div>
+    <div class='narr' style='font-size:.66rem;color:#8a93a3'>Annualized from daily model returns over {stats.get('n_days','?')} trading days. Risk-free 4.3%.</div>
   </div>
   <div>
     <h2>Tier Allocation</h2>
@@ -3584,14 +3662,9 @@ elif selected == "AI Strategy":
             show = df[cols].rename(columns={'tier': 'Tier', 'ticker': 'Ticker', 'name': 'Name'})
             st.dataframe(show, use_container_width=True, hide_index=True, height=560)
             if show_entries:
-                st.caption("Zone: 🟢 at/below optimal or in buy zone · 🟡 below the do-not-exceed ceiling · 🔴 above ceiling · "
-                           "🔄 RE-RATE/Stale = a recent earnings or guidance event (or a gap >12% past the ceiling) has made the static levels obsolete — re-derive off new guidance before acting. "
-                           "Ceilings are anchored to a forward-P/E multiple (shown in the thesis view), so they travel with estimates rather than staying fixed. "
-                           "Optimal = the pullback worth waiting for; Secondary = scale-in; Do-Not-Exceed = ceiling. Limit-order guides, not forecasts.")
-                _reval = [h['ticker'] for h in holdings if (AI_ENTRY_TARGETS.get(h['ticker']) or {}).get('reval')]
-                if _reval:
-                    st.warning("🔄 Targets need refreshing after a recent re-rating event: " + ", ".join(_reval)
-                               + ". These names reported or gapped on news; re-derive their optimal/secondary/ceiling off the updated guidance.")
+                st.caption("Zone: 🟢 at/below optimal or in buy zone · 🟡 below the do-not-exceed ceiling · 🔴 above ceiling (wait or pass). "
+                           "Optimal = the pullback worth waiting for; Secondary = reasonable scale-in; Do-Not-Exceed = ceiling, buy if running but not above. "
+                           "Anchored to 2026-05-29 prices; these are limit-order guides, not forecasts.")
             else:
                 st.caption("Since Incept = each name's price change since 2026-02-10. Contribution = target weight × that return.")
 
@@ -3908,23 +3981,16 @@ elif selected == "AI Strategy":
         brows = []
         for b in bench_list:
             pr = bprices.get(b['ticker'], {})
-            bz, btgt = ai_bench_zone(b['ticker'], pr.get('price_now'))
             brows.append({
                 "Tier": b['tier'], "Ticker": b['ticker'], "Name": b['name'],
                 "Score": f"{b['score']:.1f}" if b.get('score') is not None else "",
                 "Price": f"${pr.get('price_now'):,.2f}" if pr.get('price_now') is not None else "n/a",
                 "Since Incept": f"{pr.get('ret_pct'):+.1f}%" if pr.get('ret_pct') is not None else "n/a",
-                "Zone": bz,
-                "Optimal": f"${btgt['optimal']:,.2f}" if btgt else "—",
-                "Ceiling": f"${btgt['ceiling']:,.2f}" if btgt else "—",
                 "Note": b.get('note', ''),
             })
         tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
         brows.sort(key=lambda r: (tier_order.get(r["Tier"], 99), r["Ticker"]))
         st.dataframe(pd.DataFrame(brows), use_container_width=True, hide_index=True, height=560)
-        st.caption("Zone/Optimal/Ceiling are tracking targets for bench names (not held). "
-                   "Korea-listed OTC names (SK Hynix, Samsung) and pre-revenue names show no targets. "
-                   "Same schedule as portfolio: 🟢 buy zone · 🟡 below ceiling · 🔴 above ceiling.")
 
         # bench equal-weight performance summary
         rets = [bprices.get(b['ticker'], {}).get('ret_pct') for b in bench_list]
