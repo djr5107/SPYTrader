@@ -438,146 +438,151 @@ def get_last_trading_day():
     except Exception:
         return None
 
-
-
-@st.cache_data(ttl=300)
-def validate_ticker(symbol):
-    """Return (is_valid, info_dict). Accepts any stock/ETF symbol.
-    Cheap existence check: a 5-day history with at least one row.
-    info_dict carries price, name, and day change when available."""
-    symbol = (symbol or "").strip().upper()
-    if not symbol:
-        return False, {}
-    try:
-        t = yf.Ticker(symbol)
-        hist = t.history(period="5d", interval="1d")
-        if hist.empty:
-            return False, {}
-        price = float(hist['Close'].iloc[-1])
-        prev = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else price
-        chg = price - prev
-        chg_pct = (chg / prev * 100) if prev else 0.0
-        # name lookup is best-effort; never fail on it
-        name = symbol
+# Fetch market data
+@st.cache_data(ttl=60)
+def fetch_market_data():
+    data = {}
+    for ticker in TICKERS:
         try:
-            fi = getattr(t, "fast_info", None)
-            info = t.info if not fi else {}
-            name = (info.get("shortName") or info.get("longName") or symbol) if info else symbol
-        except Exception:
-            name = symbol
-        return True, {"symbol": symbol, "price": price, "change": chg,
-                      "change_pct": chg_pct, "name": name}
-    except Exception:
-        return False, {}
+            t = yf.Ticker(ticker)
+            hist = t.history(period="2d", interval="1d")
+            
+            if len(hist) >= 2:
+                current_price = hist['Close'].iloc[-1]
+                prev_close = hist['Close'].iloc[-2]
+                change = current_price - prev_close
+                change_pct = (change / prev_close) * 100
+                
+                data[ticker] = {
+                    'price': current_price,
+                    'change': change,
+                    'change_pct': change_pct,
+                    'volume': hist['Volume'].iloc[-1]
+                }
+            else:
+                data[ticker] = {'price': 0, 'change': 0, 'change_pct': 0, 'volume': 0}
+        except:
+            data[ticker] = {'price': 0, 'change': 0, 'change_pct': 0, 'volume': 0}
+    
+    return data
 
-def ai_portfolio_tickers():
-    """Tickers from the live AI portfolio, for one-click quick-pick."""
-    try:
-        return [h['ticker'] for h in ai_load_portfolio() if h.get('ticker')]
-    except Exception:
-        return []
+market_data = fetch_market_data()
 
-def resolve_search_symbol(text_input, quick_pick, fallback):
-    """Decide which symbol to use. Free-text wins if non-empty, else the
-    quick-pick selection, else the fallback (first default ticker)."""
-    text_input = (text_input or "").strip().upper()
-    if text_input:
-        return text_input
-    if quick_pick and quick_pick != "—":
-        return quick_pick
-    return fallback
+# Calculate technical indicators
+@st.cache_data(ttl=300)
+def calculate_technical_indicators(df, periods=[10, 20, 50, 100, 200]):
+    """Calculate comprehensive technical indicators"""
+    if df.empty or len(df) < 20:
+        return df
+    
+    df = df.copy()
+    
+    # SMAs
+    for period in periods:
+        if len(df) >= period:
+            df[f'SMA_{period}'] = df['Close'].rolling(window=period).mean()
+    
+    # RSI
+    if len(df) >= 14:
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    if len(df) >= 26:
+        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    # ADX
+    if len(df) >= 14:
+        high = df['High']
+        low = df['Low']
+        close = df['Close']
+        
+        plus_dm = high.diff()
+        minus_dm = low.diff()
+        plus_dm[plus_dm < 0] = 0
+        minus_dm[minus_dm > 0] = 0
+        
+        tr1 = pd.DataFrame(high - low)
+        tr2 = pd.DataFrame(abs(high - close.shift(1)))
+        tr3 = pd.DataFrame(abs(low - close.shift(1)))
+        frames = [tr1, tr2, tr3]
+        tr = pd.concat(frames, axis=1, join='inner').max(axis=1)
+        atr = tr.rolling(14).mean()
+        
+        plus_di = 100 * (plus_dm.ewm(alpha=1/14).mean() / atr)
+        minus_di = abs(100 * (minus_dm.ewm(alpha=1/14).mean() / atr))
+        dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
+        df['ADX'] = dx.ewm(alpha=1/14).mean()
+        df['ATR'] = atr
+    
+    # Stochastic
+    if len(df) >= 14:
+        low_min = df['Low'].rolling(window=14).min()
+        high_max = df['High'].rolling(window=14).max()
+        df['Stoch_%K'] = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+        df['Stoch_%D'] = df['Stoch_%K'].rolling(window=3).mean()
+    
+    # Volume ratio
+    if len(df) >= 20:
+        df['Volume_Avg'] = df['Volume'].rolling(window=20).mean()
+        df['Volume_Ratio'] = df['Volume'] / df['Volume_Avg']
+    
+    # Bollinger Bands
+    if len(df) >= 20:
+        sma_20 = df['Close'].rolling(window=20).mean()
+        std_20 = df['Close'].rolling(window=20).std()
+        df['BB_Upper'] = sma_20 + (std_20 * 2)
+        df['BB_Lower'] = sma_20 - (std_20 * 2)
+        df['BB_Middle'] = sma_20
+        df['BB_Width'] = (df['BB_Upper'] - df['BB_Lower']) / sma_20
+    
+    # Support and Resistance levels (pivot points)
+    if len(df) >= 5:
+        df['Pivot'] = (df['High'] + df['Low'] + df['Close']) / 3
+        df['R1'] = 2 * df['Pivot'] - df['Low']
+        df['S1'] = 2 * df['Pivot'] - df['High']
+        df['R2'] = df['Pivot'] + (df['High'] - df['Low'])
+        df['S2'] = df['Pivot'] - (df['High'] - df['Low'])
+    
+    return df
 
-AI_ENTRY_TARGETS = {
-    "GOOGL": {"optimal": 353.72, "secondary": 368.93, "ceiling": 418.37, "pe_anchor": "~24x", "reval": False},
-    "AMZN": {"optimal": 254.4, "secondary": 263.87, "ceiling": 286.88, "pe_anchor": "~32x", "reval": False},
-    "META": {"optimal": 594.56, "secondary": 616.7, "ceiling": 670.46, "pe_anchor": "~24x", "reval": False},
-    "MSFT": {"optimal": 423.23, "secondary": 438.98, "ceiling": 477.25, "pe_anchor": "~31x", "reval": False},
-    "ORCL": {"optimal": 207.72, "secondary": 216.75, "ceiling": 234.81, "pe_anchor": "~26x", "reval": False},
-    "NVDA": {"optimal": 196.36, "secondary": 204.81, "ceiling": 232.25, "pe_anchor": "~34x", "reval": False},
-    "AVGO": {"optimal": 415.5, "secondary": 433.37, "ceiling": 491.45, "pe_anchor": "~38x", "reval": False},
-    "TSM": {"optimal": 389.16, "secondary": 405.9, "ceiling": 460.3, "pe_anchor": "~26x", "reval": False},
-    "MU": {"optimal": 893.32, "secondary": 932.16, "ceiling": 1009.84, "pe_anchor": "~18x", "reval": False},
-    "MRVL": {"optimal": 232.0, "secondary": 255.0, "ceiling": 300.0, "pe_anchor": "~40x FY28", "reval": True},
-    "AMD": {"optimal": 474.81, "secondary": 495.46, "ceiling": 536.74, "pe_anchor": "~32x", "reval": False},
-    "ANET": {"optimal": 149.9, "secondary": 155.48, "ceiling": 169.04, "pe_anchor": "~38x", "reval": False},
-    "DELL": {"optimal": 378.82, "secondary": 399.86, "ceiling": 433.54, "pe_anchor": "~14x", "reval": False},
-    "ARM": {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89, "pe_anchor": "~95x", "reval": True},
-    "VRT": {"optimal": 293.61, "secondary": 306.24, "ceiling": 347.28, "pe_anchor": "~50x", "reval": False},
-    "ETN": {"optimal": 376.56, "secondary": 390.59, "ceiling": 424.64, "pe_anchor": "~30x", "reval": False},
-    "ASML": {"optimal": 1499.87, "secondary": 1564.38, "ceiling": 1774.04, "pe_anchor": "~32x", "reval": False},
-    "APH": {"optimal": 139.83, "secondary": 145.04, "ceiling": 157.69, "pe_anchor": "~38x", "reval": False},
-    "AMAT": {"optimal": 423.06, "secondary": 438.81, "ceiling": 477.06, "pe_anchor": "~26x", "reval": False},
-    "PANW": {"optimal": 264.84, "secondary": 274.71, "ceiling": 298.66, "pe_anchor": "~48x", "reval": True},
-    "TT": {"optimal": 424.22, "secondary": 440.02, "ceiling": 478.38, "pe_anchor": "~30x", "reval": False},
-    "CSCO": {"optimal": 111.99, "secondary": 116.81, "ceiling": 124.03, "pe_anchor": "~17x", "reval": False},
-    "VST": {"optimal": 149.01, "secondary": 155.42, "ceiling": 176.25, "pe_anchor": "~22x", "reval": False},
-    "CEG": {"optimal": 267.61, "secondary": 279.12, "ceiling": 316.53, "pe_anchor": "~28x", "reval": False},
-    "GEV": {"optimal": 900.54, "secondary": 939.27, "ceiling": 1065.15, "pe_anchor": "~45x", "reval": False},
-    "PWR": {"optimal": 669.03, "secondary": 693.94, "ceiling": 754.43, "pe_anchor": "~38x", "reval": False},
-    "CCJ": {"optimal": 105.94, "secondary": 109.88, "ceiling": 119.46, "pe_anchor": "n/a", "reval": False},
-    "NEE": {"optimal": 81.79, "secondary": 84.83, "ceiling": 92.23, "pe_anchor": "~20x", "reval": False},
-    "CAT": {"optimal": 814.56, "secondary": 849.59, "ceiling": 902.15, "pe_anchor": "~20x", "reval": False},
-    "FSLR": {"optimal": 285.31, "secondary": 297.59, "ceiling": 315.99, "pe_anchor": "~12x", "reval": False},
-}
-
-AI_BENCH_TARGETS = {
-    "LITE": {"optimal": 895.0, "secondary": 931.0, "ceiling": 1067.0},
-    "COHR": {"optimal": 108.56, "secondary": 113.28, "ceiling": 127.44},
-    "FN": {"optimal": 395.6, "secondary": 413.0, "ceiling": 464.4},
-    "ARM": {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89},
-    "QCOM": {"optimal": 235.96, "secondary": 245.0, "ceiling": 271.1},
-    "INTC": {"optimal": 104.36, "secondary": 110.1, "ceiling": 120.41},
-    "CRWV": {"optimal": 98.58, "secondary": 103.0, "ceiling": 120.48},
-    "ON": {"optimal": 111.57, "secondary": 116.0, "ceiling": 130.27},
-    "SNPS": {"optimal": 442.33, "secondary": 461.35, "ceiling": 513.67},
-    "LRCX": {"optimal": 295.91, "secondary": 308.63, "ceiling": 343.63},
-    "GLW": {"optimal": 168.48, "secondary": 175.73, "ceiling": 195.65},
-    "SKHHY": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "SSNLF": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "SNDK": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "WDC": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "OKLO": {"optimal": 0, "secondary": 0, "ceiling": 0},
-    "SMR": {"optimal": 11.51, "secondary": 12.04, "ceiling": 13.69},
-}
-
-def ai_entry_zone(ticker, price_now):
-    """Classify where the live price sits vs the entry targets.
-    Returns (zone_label, target_dict_or_None).
-
-    Re-rate handling: names flagged reval=True (a recent earnings/guidance event
-    obsoleted the static levels) return a 'RE-RATE — refresh' status rather than a
-    stale 🔴. Also, if the live price has run more than 12% past the ceiling, the
-    targets are treated as stale and flagged for re-derivation regardless of reval."""
-    t = AI_ENTRY_TARGETS.get(ticker)
-    if not t or price_now is None:
-        return ("—", t)
-    if t.get("reval"):
-        return ("🔄 RE-RATE — refresh", t)
-    # stale guard: price gapped well past the ceiling => targets likely obsolete
-    if price_now > t["ceiling"] * 1.12:
-        return ("🔄 Stale — re-derive", t)
-    if price_now <= t["optimal"]:
-        return ("🟢 At/below optimal", t)
-    if price_now <= t["secondary"]:
-        return ("🟢 Buy zone", t)
-    if price_now <= t["ceiling"]:
-        return ("🟡 Below ceiling", t)
-    return ("🔴 Above ceiling", t)
-
-
-def ai_bench_zone(ticker, price_now):
-    """Entry zone for a BENCH name (tracking only). Returns (label, target|None).
-    Bench names with no price data (e.g. Korea-listed OTC) return ('—', None)."""
-    t = AI_BENCH_TARGETS.get(ticker)
-    if not t or price_now is None or t.get("ceiling", 0) <= 0:
-        return ("—", t if t and t.get("ceiling", 0) > 0 else None)
-    if price_now <= t["optimal"]:
-        return ("🟢 At/below optimal", t)
-    if price_now <= t["secondary"]:
-        return ("🟢 Buy zone", t)
-    if price_now <= t["ceiling"]:
-        return ("🟡 Below ceiling", t)
-    return ("🔴 Above ceiling", t)
+# Logging functions
+def log_trade(ts, typ, sym, action, size, entry, exit, pnl, status, sig_id, 
+               entry_numeric=None, exit_numeric=None, pnl_numeric=None, dte=None,
+               strategy=None, thesis=None, max_hold=None, actual_hold=None, 
+               conviction=None, signal_type=None):
+    """Log a trade to the trade log"""
+    new_row = pd.DataFrame([{
+        'Timestamp': ts,
+        'Type': typ,
+        'Symbol': sym,
+        'Action': action,
+        'Size': size,
+        'Entry': entry,
+        'Exit': exit,
+        'P&L': pnl,
+        'Status': status,
+        'Signal ID': sig_id,
+        'Entry Price Numeric': entry_numeric,
+        'Exit Price Numeric': exit_numeric,
+        'P&L Numeric': pnl_numeric,
+        'DTE': dte,
+        'Strategy': strategy,
+        'Thesis': thesis,
+        'Max Hold Minutes': max_hold,
+        'Actual Hold Minutes': actual_hold,
+        'Conviction': conviction,
+        'Signal Type': signal_type
+    }])
+    
+    st.session_state.trade_log = pd.concat([st.session_state.trade_log, new_row], ignore_index=True)
+    save_json(TRADE_LOG_FILE, st.session_state.trade_log.to_dict('records'))
 
 def expire_old_signals():
     """Move expired signals from queue to history"""
@@ -1113,7 +1118,8 @@ AI_PORTFOLIO = [
     {"ticker": "GEV", "name": "GE Vernova", "tier": "TIER 3", "score": 6.5, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Gas turbine orders surging for DC baseload. Grid equipment (transformers) multi-year backlogs. Only near-term bridge for AI power. Risk: turbine execution, offshore wind losses."},
     {"ticker": "PWR", "name": "Quanta Services", "tier": "TIER 3", "score": 6.5, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Largest US electrical contractor. Builds transmission/substations. $30B+ backlog. Grid investment deferred 20 years. Risk: labor shortages, execution."},
     {"ticker": "CCJ", "name": "Cameco", "tier": "TIER 3", "score": 6.0, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Premier uranium producer + Westinghouse JV. 10+ yrs underinvestment in fuel supply. Long-term contracts. Risk: uranium volatility, Kazakhstan competition."},
-    {"ticker": "NEE", "name": "NextEra Energy", "tier": "TIER 3", "score": 5.5, "target_weight": 2.0, "conviction_date": "Q1 25", "thesis": "Largest US utility, largest wind/solar. Low beta (0.5), portfolio ballast. 3%+ yield. Renewables PPAs with hyperscalers. Risk: rate-sensitive, slower growth vs IPPs."},
+    {"ticker": "NEE", "name": "NextEra Energy", "tier": "TIER 3", "score": 4.5, "target_weight": 1.0, "conviction_date": "Q1 25", "thesis": "LOWERED conviction: NEE/Dominion deal (announced 5/18) makes it the 3rd-largest US energy co and a likely poster child for data-center affordability attacks. Still a fine company, but public-sentiment/regulatory risk rose and the deal adds a 12-18mo overhang. Trimmed to watch-level; paired with SO for the regulated slot."},
+    {"ticker": "SO", "name": "Southern Company", "tier": "TIER 3", "score": 5.5, "target_weight": 1.0, "conviction_date": "Q2 26", "thesis": "Regulated Southeast utility; cleanest like-for-like swap for NEE's ballast role without the affordability-poster-child risk from the NEE/Dominion deal. 50+ GW data-center pipeline (Georgia Power), $81B regulated capex driving ~9% rate-base growth through 2030. Q1 EPS $1.32 beat $1.21; targets raised to $104-105. Lower political-target profile than the new NEE. Defensive, ~3% yield. Risk: Vogtle cost history, rate-case timing, not cheap after the utility rally."},
     {"ticker": "CAT", "name": "Caterpillar", "tier": "TIER 3", "score": 5.0, "target_weight": 2.0, "conviction_date": "Q4 25", "thesis": "Backup power generators + DC construction equipment. Every DC needs 50-200MW backup from CAT. Blue-chip dividend. Risk: indirect AI exposure, global construction cyclicality."},
     {"ticker": "FSLR", "name": "First Solar", "tier": "TIER 3", "score": 5.0, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Largest US solar manufacturer. DCs co-locating solar. IRA subsidies tailwind. Domestic mfg protects vs tariffs. Risk: IRA policy uncertainty, panel oversupply."},
 ]
@@ -1317,41 +1323,6 @@ def ai_reset_portfolio():
     except Exception:
         return False
 
-
-
-AI_BENCH_FILE = "ai_bench_state.json"
-
-def ai_load_bench():
-    """Load the working bench list. Starts from embedded AI_BENCH and overlays saved edits."""
-    if _os.path.exists(AI_BENCH_FILE):
-        try:
-            with open(AI_BENCH_FILE) as f:
-                saved = _json.load(f)
-            if isinstance(saved, list) and saved:
-                return saved
-        except Exception:
-            pass
-    return [dict(b) for b in AI_BENCH]
-
-def ai_save_bench(bench_list):
-    """Persist the working bench list to disk."""
-    try:
-        with open(AI_BENCH_FILE, "w") as f:
-            _json.dump(bench_list, f, indent=2)
-        return True
-    except Exception as e:
-        st.error(f"Could not save bench: {e}")
-        return False
-
-def ai_reset_bench():
-    """Delete saved bench edits and revert to the embedded default."""
-    try:
-        if _os.path.exists(AI_BENCH_FILE):
-            _os.remove(AI_BENCH_FILE)
-        return True
-    except Exception:
-        return False
-
 @st.cache_data(ttl=900)
 def ai_fetch_prices(tickers, inception):
     """Fetch current price and inception-date price for each ticker.
@@ -1421,7 +1392,180 @@ def ai_compute_performance(holdings, inception, benchmark="^NDX"):
 
 
 # Navigation menu
+# ===== AI STRATEGY: entry targets, search, performance, fact sheet, monitor (added) =====
 
+@st.cache_data(ttl=300)
+def validate_ticker(symbol):
+    """Return (is_valid, info_dict). Accepts any stock/ETF symbol.
+    Cheap existence check: a 5-day history with at least one row.
+    info_dict carries price, name, and day change when available."""
+    symbol = (symbol or "").strip().upper()
+    if not symbol:
+        return False, {}
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="5d", interval="1d")
+        if hist.empty:
+            return False, {}
+        price = float(hist['Close'].iloc[-1])
+        prev = float(hist['Close'].iloc[-2]) if len(hist) >= 2 else price
+        chg = price - prev
+        chg_pct = (chg / prev * 100) if prev else 0.0
+        # name lookup is best-effort; never fail on it
+        name = symbol
+        try:
+            fi = getattr(t, "fast_info", None)
+            info = t.info if not fi else {}
+            name = (info.get("shortName") or info.get("longName") or symbol) if info else symbol
+        except Exception:
+            name = symbol
+        return True, {"symbol": symbol, "price": price, "change": chg,
+                      "change_pct": chg_pct, "name": name}
+    except Exception:
+        return False, {}
+
+def ai_portfolio_tickers():
+    """Tickers from the live AI portfolio, for one-click quick-pick."""
+    try:
+        return [h['ticker'] for h in ai_load_portfolio() if h.get('ticker')]
+    except Exception:
+        return []
+
+def resolve_search_symbol(text_input, quick_pick, fallback):
+    """Decide which symbol to use. Free-text wins if non-empty, else the
+    quick-pick selection, else the fallback (first default ticker)."""
+    text_input = (text_input or "").strip().upper()
+    if text_input:
+        return text_input
+    if quick_pick and quick_pick != "—":
+        return quick_pick
+    return fallback
+
+AI_ENTRY_TARGETS = {
+    "GOOGL": {"optimal": 353.72, "secondary": 368.93, "ceiling": 418.37, "pe_anchor": "~24x", "reval": False},
+    "AMZN": {"optimal": 254.4, "secondary": 263.87, "ceiling": 286.88, "pe_anchor": "~32x", "reval": False},
+    "META": {"optimal": 594.56, "secondary": 616.7, "ceiling": 670.46, "pe_anchor": "~24x", "reval": False},
+    "MSFT": {"optimal": 423.23, "secondary": 438.98, "ceiling": 477.25, "pe_anchor": "~31x", "reval": False},
+    "ORCL": {"optimal": 207.72, "secondary": 216.75, "ceiling": 234.81, "pe_anchor": "~26x", "reval": False},
+    "NVDA": {"optimal": 196.36, "secondary": 204.81, "ceiling": 232.25, "pe_anchor": "~34x", "reval": False},
+    "AVGO": {"optimal": 415.5, "secondary": 433.37, "ceiling": 491.45, "pe_anchor": "~38x", "reval": False},
+    "TSM": {"optimal": 389.16, "secondary": 405.9, "ceiling": 460.3, "pe_anchor": "~26x", "reval": False},
+    "MU": {"optimal": 893.32, "secondary": 932.16, "ceiling": 1009.84, "pe_anchor": "~18x", "reval": False},
+    "MRVL": {"optimal": 232.0, "secondary": 255.0, "ceiling": 300.0, "pe_anchor": "~40x FY28", "reval": True},
+    "AMD": {"optimal": 474.81, "secondary": 495.46, "ceiling": 536.74, "pe_anchor": "~32x", "reval": False},
+    "ANET": {"optimal": 149.9, "secondary": 155.48, "ceiling": 169.04, "pe_anchor": "~38x", "reval": False},
+    "DELL": {"optimal": 378.82, "secondary": 399.86, "ceiling": 433.54, "pe_anchor": "~14x", "reval": False},
+    "ARM": {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89, "pe_anchor": "~95x", "reval": True},
+    "VRT": {"optimal": 293.61, "secondary": 306.24, "ceiling": 347.28, "pe_anchor": "~50x", "reval": False},
+    "ETN": {"optimal": 376.56, "secondary": 390.59, "ceiling": 424.64, "pe_anchor": "~30x", "reval": False},
+    "ASML": {"optimal": 1499.87, "secondary": 1564.38, "ceiling": 1774.04, "pe_anchor": "~32x", "reval": False},
+    "APH": {"optimal": 139.83, "secondary": 145.04, "ceiling": 157.69, "pe_anchor": "~38x", "reval": False},
+    "AMAT": {"optimal": 423.06, "secondary": 438.81, "ceiling": 477.06, "pe_anchor": "~26x", "reval": False},
+    "PANW": {"optimal": 264.84, "secondary": 274.71, "ceiling": 298.66, "pe_anchor": "~48x", "reval": True},
+    "TT": {"optimal": 424.22, "secondary": 440.02, "ceiling": 478.38, "pe_anchor": "~30x", "reval": False},
+    "CSCO": {"optimal": 111.99, "secondary": 116.81, "ceiling": 124.03, "pe_anchor": "~17x", "reval": False},
+    "VST": {"optimal": 149.01, "secondary": 155.42, "ceiling": 176.25, "pe_anchor": "~22x", "reval": False},
+    "CEG": {"optimal": 267.61, "secondary": 279.12, "ceiling": 316.53, "pe_anchor": "~28x", "reval": False},
+    "GEV": {"optimal": 900.54, "secondary": 939.27, "ceiling": 1065.15, "pe_anchor": "~45x", "reval": False},
+    "PWR": {"optimal": 669.03, "secondary": 693.94, "ceiling": 754.43, "pe_anchor": "~38x", "reval": False},
+    "CCJ": {"optimal": 105.94, "secondary": 109.88, "ceiling": 119.46, "pe_anchor": "n/a", "reval": False},
+    "NEE": {"optimal": 81.79, "secondary": 84.83, "ceiling": 92.23, "pe_anchor": "~20x", "reval": False},
+    "SO": {"optimal": 86.95, "secondary": 90.19, "ceiling": 98.05, "pe_anchor": "~20x", "reval": False},
+    "CAT": {"optimal": 814.56, "secondary": 849.59, "ceiling": 902.15, "pe_anchor": "~20x", "reval": False},
+    "FSLR": {"optimal": 285.31, "secondary": 297.59, "ceiling": 315.99, "pe_anchor": "~12x", "reval": False},
+}
+
+AI_BENCH_TARGETS = {
+    "LITE": {"optimal": 895.0, "secondary": 931.0, "ceiling": 1067.0},
+    "COHR": {"optimal": 108.56, "secondary": 113.28, "ceiling": 127.44},
+    "FN": {"optimal": 395.6, "secondary": 413.0, "ceiling": 464.4},
+    "ARM": {"optimal": 317.96, "secondary": 335.63, "ceiling": 363.89},
+    "QCOM": {"optimal": 235.96, "secondary": 245.0, "ceiling": 271.1},
+    "INTC": {"optimal": 104.36, "secondary": 110.1, "ceiling": 120.41},
+    "CRWV": {"optimal": 98.58, "secondary": 103.0, "ceiling": 120.48},
+    "ON": {"optimal": 111.57, "secondary": 116.0, "ceiling": 130.27},
+    "SNPS": {"optimal": 442.33, "secondary": 461.35, "ceiling": 513.67},
+    "LRCX": {"optimal": 295.91, "secondary": 308.63, "ceiling": 343.63},
+    "GLW": {"optimal": 168.48, "secondary": 175.73, "ceiling": 195.65},
+    "SKHHY": {"optimal": 0, "secondary": 0, "ceiling": 0},
+    "SSNLF": {"optimal": 0, "secondary": 0, "ceiling": 0},
+    "SNDK": {"optimal": 0, "secondary": 0, "ceiling": 0},
+    "WDC": {"optimal": 0, "secondary": 0, "ceiling": 0},
+    "OKLO": {"optimal": 0, "secondary": 0, "ceiling": 0},
+    "SMR": {"optimal": 11.51, "secondary": 12.04, "ceiling": 13.69},
+}
+
+def ai_entry_zone(ticker, price_now):
+    """Classify where the live price sits vs the entry targets.
+    Returns (zone_label, target_dict_or_None).
+
+    Re-rate handling: names flagged reval=True (a recent earnings/guidance event
+    obsoleted the static levels) return a 'RE-RATE — refresh' status rather than a
+    stale 🔴. Also, if the live price has run more than 12% past the ceiling, the
+    targets are treated as stale and flagged for re-derivation regardless of reval."""
+    t = AI_ENTRY_TARGETS.get(ticker)
+    if not t or price_now is None:
+        return ("—", t)
+    if t.get("reval"):
+        return ("🔄 RE-RATE — refresh", t)
+    # stale guard: price gapped well past the ceiling => targets likely obsolete
+    if price_now > t["ceiling"] * 1.12:
+        return ("🔄 Stale — re-derive", t)
+    if price_now <= t["optimal"]:
+        return ("🟢 At/below optimal", t)
+    if price_now <= t["secondary"]:
+        return ("🟢 Buy zone", t)
+    if price_now <= t["ceiling"]:
+        return ("🟡 Below ceiling", t)
+    return ("🔴 Above ceiling", t)
+
+
+def ai_bench_zone(ticker, price_now):
+    """Entry zone for a BENCH name (tracking only). Returns (label, target|None).
+    Bench names with no price data (e.g. Korea-listed OTC) return ('—', None)."""
+    t = AI_BENCH_TARGETS.get(ticker)
+    if not t or price_now is None or t.get("ceiling", 0) <= 0:
+        return ("—", t if t and t.get("ceiling", 0) > 0 else None)
+    if price_now <= t["optimal"]:
+        return ("🟢 At/below optimal", t)
+    if price_now <= t["secondary"]:
+        return ("🟢 Buy zone", t)
+    if price_now <= t["ceiling"]:
+        return ("🟡 Below ceiling", t)
+    return ("🔴 Above ceiling", t)
+
+AI_BENCH_FILE = "ai_bench_state.json"
+
+def ai_load_bench():
+    """Load the working bench list. Starts from embedded AI_BENCH and overlays saved edits."""
+    if _os.path.exists(AI_BENCH_FILE):
+        try:
+            with open(AI_BENCH_FILE) as f:
+                saved = _json.load(f)
+            if isinstance(saved, list) and saved:
+                return saved
+        except Exception:
+            pass
+    return [dict(b) for b in AI_BENCH]
+
+def ai_save_bench(bench_list):
+    """Persist the working bench list to disk."""
+    try:
+        with open(AI_BENCH_FILE, "w") as f:
+            _json.dump(bench_list, f, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Could not save bench: {e}")
+        return False
+
+def ai_reset_bench():
+    """Delete saved bench edits and revert to the embedded default."""
+    try:
+        if _os.path.exists(AI_BENCH_FILE):
+            _os.remove(AI_BENCH_FILE)
+        return True
+    except Exception:
+        return False
 
 @st.cache_data(ttl=900)
 def ai_equity_curve(holdings_key, inception, benchmark="^NDX", extra_bench="VOO"):
@@ -1600,6 +1744,78 @@ def ai_risk_stats(ec, rf_annual=0.043):
     })
     return stats
 
+def ai_risk_stats(ec, rf_annual=0.043):
+    """Derive risk statistics from the equity-curve dict produced by
+    ai_equity_curve(). Returns a dict of fact-sheet metrics. All derived from
+    the daily MODEL curve, so they describe the strategy allocation, not fills."""
+    import numpy as _np
+    stats = {}
+    port = ec.get("port") or []
+    ndx = ec.get("ndx") or []
+    if len(port) < 5:
+        return stats
+    # rebuild daily levels from cumulative % to compute daily returns
+    lvl = _np.array([1 + p / 100 for p in port], dtype=float)
+    rets = _np.diff(lvl) / lvl[:-1]
+    # benchmark daily returns (align lengths)
+    bret = None
+    nlvl = None
+    if ndx and len([x for x in ndx if x is not None]) >= 5:
+        nlvl = _np.array([1 + (x or 0) / 100 for x in ndx], dtype=float)
+        bret = _np.diff(nlvl) / nlvl[:-1]
+    ann = 252
+    mean_d = rets.mean()
+    std_d = rets.std(ddof=1)
+    ann_ret_geo = (lvl[-1] / lvl[0]) ** (ann / len(rets)) - 1   # annualized (geometric)
+    ann_vol = std_d * _np.sqrt(ann)
+    rf_d = (1 + rf_annual) ** (1 / ann) - 1
+    sharpe = ((mean_d - rf_d) / std_d * _np.sqrt(ann)) if std_d > 0 else None
+    downside = rets[rets < 0]
+    sortino = ((mean_d - rf_d) / downside.std(ddof=1) * _np.sqrt(ann)) if len(downside) > 1 and downside.std(ddof=1) > 0 else None
+    # drawdown already in ec
+    max_dd = ec.get("max_dd")
+    calmar = (ann_ret_geo * 100 / abs(max_dd)) if max_dd else None
+    # beta / alpha / tracking error / IR vs NDX
+    beta = alpha = te = ir = up_capture = down_capture = corr = None
+    if bret is not None and len(bret) == len(rets):
+        cov = _np.cov(rets, bret)
+        if cov[1, 1] > 0:
+            beta = cov[0, 1] / cov[1, 1]
+        corr = _np.corrcoef(rets, bret)[0, 1]
+        active = rets - bret
+        te = active.std(ddof=1) * _np.sqrt(ann)
+        ir = (active.mean() * ann) / te if te > 0 else None
+        b_ann_geo = (nlvl[-1] / nlvl[0]) ** (ann / len(bret)) - 1
+        rf_ann = rf_annual
+        if beta is not None:
+            alpha = (ann_ret_geo - rf_ann) - beta * (b_ann_geo - rf_ann)
+        up = bret > 0
+        dn = bret < 0
+        if up.sum() > 0 and bret[up].sum() != 0:
+            up_capture = rets[up].sum() / bret[up].sum() * 100
+        if dn.sum() > 0 and bret[dn].sum() != 0:
+            down_capture = rets[dn].sum() / bret[dn].sum() * 100
+    pos = (rets > 0).sum()
+    win_rate = pos / len(rets) * 100
+    stats.update({
+        "ann_return": round(ann_ret_geo * 100, 2),
+        "ann_vol": round(ann_vol * 100, 2),
+        "sharpe": round(sharpe, 2) if sharpe is not None else None,
+        "sortino": round(sortino, 2) if sortino is not None else None,
+        "calmar": round(calmar, 2) if calmar is not None else None,
+        "max_dd": max_dd,
+        "beta": round(beta, 2) if beta is not None else None,
+        "alpha": round(alpha * 100, 2) if alpha is not None else None,
+        "tracking_error": round(te * 100, 2) if te is not None else None,
+        "info_ratio": round(ir, 2) if ir is not None else None,
+        "up_capture": round(up_capture, 1) if up_capture is not None else None,
+        "down_capture": round(down_capture, 1) if down_capture is not None else None,
+        "correlation": round(corr, 2) if corr is not None else None,
+        "win_rate": round(win_rate, 1),
+        "n_days": len(rets) + 1,
+    })
+    return stats
+
 
 def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
                             inception, as_of, benchmark_label="Nasdaq-100 (NDX)"):
@@ -1643,7 +1859,6 @@ def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
         perf_rows += f"<tr><td>S&amp;P 500 (VOO)</td><td class='r'>{pct(ec['voo_total'])}</td></tr>"
 
     def stat(v, suf=""): return f"{v}{suf}" if v is not None else "n/a"
-    # Portfolio-level (benchmark-agnostic) stats
     risk_rows = (
         f"<tr><td>Annualized return</td><td class='r'>{stat(stats.get('ann_return'),'%')}</td></tr>"
         f"<tr><td>Annualized volatility (std dev)</td><td class='r'>{stat(stats.get('ann_vol'),'%')}</td></tr>"
@@ -1653,7 +1868,6 @@ def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
         f"<tr><td>Calmar ratio</td><td class='r'>{stat(stats.get('calmar'))}</td></tr>"
         f"<tr><td>Win rate (daily)</td><td class='r'>{stat(stats.get('win_rate'),'%')}</td></tr>"
     )
-    # Two-benchmark relative stats: NDX (primary) and S&P 500 via VOO (the equity barometer)
     bench_rows = (
         "<tr><th>Metric</th><th class='r'>vs NDX</th><th class='r'>vs S&amp;P 500</th></tr>"
         f"<tr><td>Beta</td><td class='r'><strong>{stat(stats.get('beta'))}</strong></td><td class='r'><strong>{stat(stats.get('beta_sp'))}</strong></td></tr>"
@@ -1766,6 +1980,147 @@ def ai_build_factsheet_html(holdings, per, ec, stats, strat_ret, bench_ret,
 </div>
 </div></body></html>"""
     return html
+
+@st.cache_data(ttl=3600)
+def em_earnings_info(ticker):
+    """Next earnings date + most recent past earnings date from yfinance.
+    Returns dict with days_until (or None) and reported_recently (<=3 trading days)."""
+    out = {"next": None, "last": None, "days_until": None, "reported_recently": False}
+    try:
+        t = yf.Ticker(ticker)
+        cal = None
+        try:
+            cal = t.get_earnings_dates(limit=8)
+        except Exception:
+            cal = None
+        now = pd.Timestamp.now(tz="America/New_York")
+        if cal is not None and not cal.empty:
+            idx = cal.index.tz_convert("America/New_York") if cal.index.tz is not None else cal.index.tz_localize("America/New_York")
+            future = [d for d in idx if d >= now]
+            past = [d for d in idx if d < now]
+            if future:
+                nd = min(future)
+                out["next"] = nd.strftime("%Y-%m-%d")
+                out["days_until"] = (nd.normalize() - now.normalize()).days
+            if past:
+                ld = max(past)
+                out["last"] = ld.strftime("%Y-%m-%d")
+                # reported within ~3 trading days (use 5 calendar days as proxy)
+                out["reported_recently"] = (now.normalize() - ld.normalize()).days <= 5
+    except Exception:
+        pass
+    return out
+
+@st.cache_data(ttl=1800)
+def em_recent_move(ticker):
+    """1-day % move vs prior close, to drive the gap-based re-rate flag."""
+    try:
+        h = yf.Ticker(ticker).history(period="5d", interval="1d")
+        if len(h) >= 2:
+            return float((h['Close'].iloc[-1] / h['Close'].iloc[-2] - 1) * 100)
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(ttl=1800)
+def em_forward_pe_eps(ticker):
+    """Forward EPS + forward P/E from yfinance info, used to recompute the
+    P/E-anchored ceiling. Returns (forward_eps, forward_pe) or (None, None)."""
+    try:
+        info = yf.Ticker(ticker).info
+        return info.get("forwardEps"), info.get("forwardPE")
+    except Exception:
+        return None, None
+
+def em_anchor_multiple(ticker):
+    """Parse the numeric multiple out of the AI_ENTRY_TARGETS pe_anchor string,
+    e.g. '~40x FY28' -> 40.0. Returns None if not parseable."""
+    t = AI_ENTRY_TARGETS.get(ticker) or {}
+    s = str(t.get("pe_anchor", ""))
+    import re as _re
+    m = _re.search(r'(\d+(?:\.\d+)?)\s*x', s)
+    return float(m.group(1)) if m else None
+
+def em_recomputed_ceiling(ticker):
+    """If we have forward EPS and a parseable anchor multiple, recompute the
+    do-not-exceed ceiling = anchor_multiple x forward_eps. Returns float or None.
+    This is the deterministic, no-LLM way the ceiling 'travels with estimates'."""
+    fwd_eps, _ = em_forward_pe_eps(ticker)
+    mult = em_anchor_multiple(ticker)
+    if fwd_eps and mult and fwd_eps > 0:
+        return round(mult * fwd_eps, 2)
+    return None
+
+@st.cache_data(ttl=1800)
+def em_headlines(ticker, n=5):
+    """Recent headlines from yfinance. Returns list of (title, publisher, url)."""
+    out = []
+    try:
+        news = yf.Ticker(ticker).news or []
+        for item in news[:n]:
+            content = item.get("content", item)
+            title = content.get("title") or item.get("title", "")
+            pub = (content.get("provider", {}) or {}).get("displayName") or item.get("publisher", "")
+            url = (content.get("canonicalUrl", {}) or {}).get("url") or item.get("link", "")
+            if title:
+                out.append((title, pub, url))
+    except Exception:
+        pass
+    return out
+
+def em_review_flag(ticker, price_now, gap_threshold=10.0):
+    """Combine signals into a single review status. Pure rules, no LLM.
+    Priority: explicit reval flag > recent earnings > large gap > stale-vs-ceiling > clear."""
+    reasons = []
+    t = AI_ENTRY_TARGETS.get(ticker) or {}
+    if t.get("reval"):
+        reasons.append("flagged for re-rate")
+    info = em_earnings_info(ticker)
+    if info.get("reported_recently"):
+        reasons.append(f"reported {info.get('last')}")
+    if info.get("days_until") is not None and info["days_until"] <= 7:
+        reasons.append(f"reports in {info['days_until']}d ({info.get('next')})")
+    mv = em_recent_move(ticker)
+    if mv is not None and abs(mv) >= gap_threshold:
+        reasons.append(f"gapped {mv:+.0f}% today")
+    if price_now is not None and t.get("ceiling") and price_now > t["ceiling"] * 1.12:
+        reasons.append("price >12% past ceiling")
+    status = "🔴 REVIEW" if reasons else "🟢 OK"
+    return status, reasons
+
+def em_claude_interpret(api_key, ticker, headlines, gap, earnings_info):
+    """OPT-IN ONLY. Uses the USER'S OWN Anthropic API key to summarize whether
+    recent news looks like a fundamental re-rate vs noise. Never called unless the
+    user pastes their own key and clicks the button, so it cannot charge the app
+    owner's credits. Returns a short string or an error message."""
+    if not api_key:
+        return "No API key provided."
+    try:
+        import urllib.request, json as _json
+        head_txt = "\n".join(f"- {h[0]} ({h[1]})" for h in headlines) or "No headlines."
+        prompt = (
+            f"You are a sell-side equity analyst. Ticker: {ticker}. "
+            f"1-day move: {gap:+.1f}% if known. Next/last earnings: {earnings_info}. "
+            f"Recent headlines:\n{head_txt}\n\n"
+            "In 3 sentences: is this likely a FUNDAMENTAL re-rate (guidance/earnings/contract that "
+            "changes fair value) or NOISE (momentum/sympathy/macro)? If fundamental, say whether "
+            "estimates likely moved up or down. Be specific and concise. End with: VERDICT: RE-RATE or VERDICT: NOISE."
+        )
+        body = _json.dumps({
+            "model": "claude-3-5-haiku-20241022",
+            "max_tokens": 300,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages", data=body,
+            headers={"Content-Type": "application/json", "x-api-key": api_key,
+                     "anthropic-version": "2023-06-01"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = _json.loads(r.read())
+        parts = data.get("content", [])
+        return "".join(p.get("text", "") for p in parts if p.get("type") == "text") or "No response."
+    except Exception as e:
+        return f"Claude call failed: {e}"
 
 selected = option_menu(
     menu_title=None,
@@ -3512,7 +3867,7 @@ elif selected == "AI Strategy":
     st.header("🤖 AI Infrastructure Equity Strategy")
     st.caption("Live tracking for the AI infrastructure portfolio. Inception 2026-02-10. Benchmark: Nasdaq-100 (NDX).")
 
-    ai_tabs = st.tabs(["📊 Portfolio", "📈 Performance", "✏️ Manage", "👁️ Bench", "📜 Mandate", "🎯 Conviction", "📄 Fact Sheet"])
+    ai_tabs = st.tabs(["📊 Portfolio", "📈 Performance", "✏️ Manage", "👁️ Bench", "📜 Mandate", "🎯 Conviction", "📄 Fact Sheet", "📰 Earnings Monitor"])
 
     # ---------------- PORTFOLIO ----------------
     with ai_tabs[0]:
@@ -3922,9 +4277,6 @@ elif selected == "AI Strategy":
         tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
         brows.sort(key=lambda r: (tier_order.get(r["Tier"], 99), r["Ticker"]))
         st.dataframe(pd.DataFrame(brows), use_container_width=True, hide_index=True, height=560)
-        st.caption("Zone/Optimal/Ceiling are tracking targets for bench names (not held). "
-                   "Korea-listed OTC names (SK Hynix, Samsung) and pre-revenue names show no targets. "
-                   "Same schedule as portfolio: 🟢 buy zone · 🟡 below ceiling · 🔴 above ceiling.")
 
         # bench equal-weight performance summary
         rets = [bprices.get(b['ticker'], {}).get('ret_pct') for b in bench_list]
@@ -3982,6 +4334,80 @@ elif selected == "AI Strategy":
 
         st.markdown("##### Preview")
         st.components.v1.html(html, height=1100, scrolling=True)
+
+    # ---------------- EARNINGS & NEWS MONITOR ----------------
+    with ai_tabs[7]:
+        st.subheader("Earnings & News Monitor")
+        st.caption("Flags which holdings to review: upcoming/recent earnings, large price gaps, a P/E-anchored ceiling recompute from live forward EPS, and recent headlines. This surfaces what to look at; it does not change recommendations automatically.")
+
+        mon_holdings = ai_load_portfolio()
+        st.markdown("##### Review Flags")
+        st.caption("Pure rules, no AI. 🔴 = something changed worth a look; 🟢 = nothing flagged.")
+
+        with st.spinner("Scanning earnings calendar, price gaps, and estimates..."):
+            mon_rows = []
+            for h in mon_holdings:
+                tk = h['ticker']
+                pr = ai_fetch_prices((tk,), AI_STRATEGY_INCEPTION).get(tk, {})
+                price_now = pr.get('price_now')
+                status, reasons = em_review_flag(tk, price_now)
+                ei = em_earnings_info(tk)
+                new_ceil = em_recomputed_ceiling(tk)
+                old = AI_ENTRY_TARGETS.get(tk) or {}
+                old_ceil = old.get("ceiling")
+                ceil_drift = None
+                if new_ceil and old_ceil:
+                    ceil_drift = (new_ceil / old_ceil - 1) * 100
+                mon_rows.append({
+                    "Ticker": tk,
+                    "Status": status,
+                    "Why": "; ".join(reasons) if reasons else "—",
+                    "Next Earnings": ei.get("next") or "—",
+                    "Anchor Ceiling": f"${old_ceil:,.2f}" if old_ceil else "—",
+                    "Live-EPS Ceiling": f"${new_ceil:,.2f}" if new_ceil else "n/a",
+                    "Ceiling Drift": f"{ceil_drift:+.0f}%" if ceil_drift is not None else "—",
+                })
+            mon_df = pd.DataFrame(mon_rows)
+            # sort: review first
+            mon_df["_o"] = mon_df["Status"].apply(lambda s: 0 if "REVIEW" in s else 1)
+            mon_df = mon_df.sort_values(["_o", "Ticker"]).drop(columns="_o")
+        st.dataframe(mon_df, use_container_width=True, hide_index=True, height=560)
+        st.caption("Live-EPS Ceiling = (forward P/E anchor) × (live forward EPS from the data feed). "
+                   "When it drifts far from the static Anchor Ceiling, the static target is stale; re-derive. "
+                   "Forward EPS is best-effort from free data and can lag a fresh print by a day.")
+
+        # per-name headlines + optional Claude interpretation
+        st.divider()
+        st.markdown("##### Headlines & Optional AI Read")
+        pick = st.selectbox("Holding", [h['ticker'] for h in mon_holdings], key="em_pick")
+        heads = em_headlines(pick, n=6)
+        if heads:
+            for title, pub, url in heads:
+                if url:
+                    st.markdown(f"- [{title}]({url})  \n  <span style='color:#8a93a3;font-size:.8rem'>{pub}</span>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"- {title}  \n  <span style='color:#8a93a3;font-size:.8rem'>{pub}</span>", unsafe_allow_html=True)
+        else:
+            st.info("No recent headlines returned for this name.")
+
+        with st.expander("🤖 Optional: interpret with your own Claude API key"):
+            st.caption(
+                "This is OFF by default and uses **your own** Anthropic API key, entered below. "
+                "It is never stored and never uses any built-in key, so it cannot charge anyone else's credits. "
+                "Leave blank to skip. One call summarizes whether the recent move looks like a fundamental "
+                "re-rate or noise."
+            )
+            user_key = st.text_input("Your Anthropic API key (sk-ant-...)", type="password", key="em_api_key")
+            if st.button("Interpret recent news for " + pick, key="em_interpret_btn"):
+                if not user_key:
+                    st.warning("Enter your own API key to use this. It stays in your session only.")
+                else:
+                    gap = em_recent_move(pick) or 0.0
+                    ei = em_earnings_info(pick)
+                    with st.spinner("Asking Claude (your key)..."):
+                        msg = em_claude_interpret(user_key, pick, heads, gap, ei)
+                    st.markdown(msg)
+                    st.caption("Interpretation only. Decision and conviction changes remain yours.")
 
 
 # ========================================
