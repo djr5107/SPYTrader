@@ -2122,6 +2122,137 @@ def em_claude_interpret(api_key, ticker, headlines, gap, earnings_info):
     except Exception as e:
         return f"Claude call failed: {e}"
 
+# ===== Transactions / batting average / attribution helpers (added) =====
+AI_REBALANCE_DATE = "2026-06-01"   # rebalance executed at this session's close
+AI_PORTFOLIO_NOTIONAL = 100000.0   # $100k example book for share counts
+
+@st.cache_data(ttl=900)
+def ai_prices_on_date(tickers, target_date):
+    """Close price on (or the last trading day before) target_date for each ticker.
+    Returns dict ticker -> float or None. Uses auto-adjusted closes for consistency
+    with the rest of the app; over a few months the adjustment effect is negligible."""
+    out = {}
+    if not tickers:
+        return out
+    try:
+        start = (pd.Timestamp(target_date) - pd.Timedelta(days=12)).strftime("%Y-%m-%d")
+        end = (pd.Timestamp(target_date) + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+        data = yf.download(list(tickers), start=start, end=end, progress=False, auto_adjust=True)
+        if data is None or data.empty:
+            return {t: None for t in tickers}
+        if isinstance(data.columns, pd.MultiIndex):
+            close = data['Close']
+        else:
+            close = data[['Close']] if 'Close' in data else data
+            if len(tickers) == 1:
+                close.columns = list(tickers)
+        tgt = pd.Timestamp(target_date)
+        for t in tickers:
+            try:
+                s = close[t].dropna() if t in close.columns else pd.Series(dtype=float)
+                s = s[s.index <= tgt]
+                out[t] = float(s.iloc[-1]) if not s.empty else None
+            except Exception:
+                out[t] = None
+    except Exception:
+        out = {t: None for t in tickers}
+    return out
+
+def ai_build_transactions(holdings, exec_date, notional=AI_PORTFOLIO_NOTIONAL):
+    """Model the rebalance as establishing every target position at exec_date's
+    close, sized to `notional`. Returns (rows, totals). Whole-share rounding."""
+    tickers = [h['ticker'] for h in holdings if h.get('ticker') and (h.get('target_weight') or 0) > 0]
+    px = ai_prices_on_date(tuple(tickers), exec_date)
+    rows = []
+    invested = 0.0
+    for h in holdings:
+        tk = h['ticker']
+        w = h.get('target_weight') or 0
+        if w <= 0:
+            continue
+        p = px.get(tk)
+        if p and p > 0:
+            target_dollars = notional * (w / 100.0)
+            shares = int(target_dollars // p)   # whole shares, no fractional
+            value = shares * p
+            invested += value
+        else:
+            shares, value = None, None
+        rows.append({"ticker": tk, "name": h.get('name', tk), "tier": h.get('tier', ''),
+                     "weight": w, "price": p, "shares": shares, "value": value})
+    cash = notional - invested
+    totals = {"invested": invested, "cash": cash, "notional": notional}
+    return rows, totals
+
+def ai_batting_average(per, ndx_total, voo_total):
+    """Per-holding outperformance vs NDX (primary) and VOO/S&P 500 (secondary),
+    measured on since-inception return. Returns dict with counts, rates, rows."""
+    rows = []
+    beat_ndx = beat_voo = total = 0
+    for h in per:
+        r = h.get('ret_pct')
+        if r is None:
+            continue
+        total += 1
+        bn = ndx_total is not None and r > ndx_total
+        bv = voo_total is not None and r > voo_total
+        beat_ndx += 1 if bn else 0
+        beat_voo += 1 if bv else 0
+        rows.append({"ticker": h['ticker'], "tier": h.get('tier', ''), "ret": r,
+                     "vs_ndx": (r - ndx_total) if ndx_total is not None else None,
+                     "vs_voo": (r - voo_total) if voo_total is not None else None,
+                     "beat_ndx": bn, "beat_voo": bv})
+    return {
+        "rows": rows, "total": total,
+        "beat_ndx": beat_ndx, "beat_voo": beat_voo,
+        "ba_ndx": (beat_ndx / total * 100) if total else None,
+        "ba_voo": (beat_voo / total * 100) if total else None,
+        "ndx_total": ndx_total, "voo_total": voo_total,
+    }
+
+def ai_attribution_by_tier(per, bench_per):
+    """Brinson-Fachler tier attribution: portfolio vs the equal-weighted bench
+    (watchlist) universe. Segments = the four tiers.
+      Allocation_i = (wp_i - wb_i)(Rb_i - Rb)
+      Selection_i  = wb_i (Rp_i - Rb_i)
+      Interaction_i= (wp_i - wb_i)(Rp_i - Rb_i)
+    Sum of all three across tiers = Rp - Rb (active vs the bench universe).
+    Returns (rows, totals). Returns are in % points."""
+    tiers = ["HYPER", "TIER 1", "TIER 2", "TIER 3"]
+    p_w = {t: 0.0 for t in tiers}; p_wr = {t: 0.0 for t in tiers}; tot_w = 0.0
+    for h in per:
+        t = h.get('tier'); w = h.get('target_weight') or 0; r = h.get('ret_pct')
+        if t not in tiers or r is None or w <= 0:
+            continue
+        p_w[t] += w; p_wr[t] += w * r; tot_w += w
+    Rp_i = {t: (p_wr[t] / p_w[t] if p_w[t] > 0 else 0.0) for t in tiers}
+    wp_i = {t: (p_w[t] / tot_w if tot_w > 0 else 0.0) for t in tiers}
+
+    b_names = [b for b in bench_per if b.get('ret_pct') is not None and b.get('tier') in tiers]
+    Nb = len(b_names)
+    b_cnt = {t: 0 for t in tiers}; b_sum = {t: 0.0 for t in tiers}
+    for b in b_names:
+        t = b['tier']; b_cnt[t] += 1; b_sum[t] += b['ret_pct']
+    Rb_i = {t: (b_sum[t] / b_cnt[t] if b_cnt[t] > 0 else 0.0) for t in tiers}
+    wb_i = {t: (b_cnt[t] / Nb if Nb > 0 else 0.0) for t in tiers}
+    Rb = sum(wb_i[t] * Rb_i[t] for t in tiers)
+    Rp = sum(wp_i[t] * Rp_i[t] for t in tiers)
+
+    rows = []; t_alloc = t_sel = t_int = 0.0
+    for t in tiers:
+        alloc = (wp_i[t] - wb_i[t]) * (Rb_i[t] - Rb)
+        sel = wb_i[t] * (Rp_i[t] - Rb_i[t])
+        inter = (wp_i[t] - wb_i[t]) * (Rp_i[t] - Rb_i[t])
+        t_alloc += alloc; t_sel += sel; t_int += inter
+        rows.append({"tier": t, "wp": wp_i[t] * 100, "wb": wb_i[t] * 100,
+                     "Rp": Rp_i[t], "Rb": Rb_i[t],
+                     "alloc": alloc, "sel": sel, "inter": inter,
+                     "total": alloc + sel + inter})
+    totals = {"alloc": t_alloc, "sel": t_sel, "inter": t_int,
+              "active": Rp - Rb, "Rp": Rp, "Rb": Rb}
+    return rows, totals
+
+
 selected = option_menu(
     menu_title=None,
     options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Premium Seller", "AI Strategy", "Macro Dashboard"],
@@ -3867,7 +3998,7 @@ elif selected == "AI Strategy":
     st.header("🤖 AI Infrastructure Equity Strategy")
     st.caption("Live tracking for the AI infrastructure portfolio. Inception 2026-02-10. Benchmark: Nasdaq-100 (NDX).")
 
-    ai_tabs = st.tabs(["📊 Portfolio", "📈 Performance", "✏️ Manage", "👁️ Bench", "📜 Mandate", "🎯 Conviction", "📄 Fact Sheet", "📰 Earnings Monitor"])
+    ai_tabs = st.tabs(["📊 Portfolio", "📈 Performance", "✏️ Manage", "👁️ Bench", "📜 Mandate", "🎯 Conviction", "📄 Fact Sheet", "📰 Earnings Monitor", "🧾 Transactions"])
 
     # ---------------- PORTFOLIO ----------------
     with ai_tabs[0]:
@@ -3886,6 +4017,7 @@ elif selected == "AI Strategy":
         delta_v = (strat_ret - bench_ret) if (strat_ret is not None and bench_ret is not None) else None
         mc4.metric("NDX (benchmark)", f"{bench_ret:+.1f}%" if bench_ret is not None else "n/a",
                    f"{delta_v:+.1f}% active" if delta_v is not None else None)
+        st.caption(f"Inception date: **{AI_STRATEGY_INCEPTION}** · Benchmark: Nasdaq-100 (NDX) · Showing current holdings only (target weight > 0).")
 
         # tier allocation summary
         st.markdown("##### Tier Allocation vs. Target")
@@ -3904,7 +4036,8 @@ elif selected == "AI Strategy":
         show_entries = st.checkbox("Show entry-target columns (optimal / secondary / do-not-exceed)", value=True,
                                    help="Limit-order anchors from the buildout plan. Zone shows where the live price sits now.")
 
-        df = pd.DataFrame(per)
+        per_current = [p for p in per if (p.get('target_weight') or 0) > 0]
+        df = pd.DataFrame(per_current)
         if not df.empty:
             df['Price'] = df['price_now'].apply(lambda x: f"${x:,.2f}" if x is not None else "n/a")
             df['Since Incept'] = df['ret_pct'].apply(lambda x: f"{x:+.1f}%" if x is not None else "n/a")
@@ -4071,6 +4204,70 @@ elif selected == "AI Strategy":
                        f"VOO {ec.get('voo_total','n/a')}% since {AI_STRATEGY_INCEPTION}. "
                        "Model curve: target weights × each holding's price path, cash held flat, all indexed to 100 at inception. "
                        "Computed live from current holdings, so editing weights on the Manage tab updates this chart.")
+        # ===== Batting Average =====
+        st.divider()
+        st.markdown("##### Batting Average")
+        st.caption("Share of holdings that beat the benchmark on since-inception return. NDX is the primary measure; S&P 500 (VOO) is secondary.")
+        ndx_tot = ec.get("ndx_total") if ec else bench_ret
+        voo_tot = ec.get("voo_total") if ec else None
+        ba = ai_batting_average(per, ndx_tot, voo_tot)
+        if ba["total"]:
+            bc1, bc2, bc3 = st.columns(3)
+            bc1.metric("Holdings scored", f"{ba['total']}")
+            bc2.metric("Batting avg vs NDX", f"{ba['ba_ndx']:.0f}%" if ba['ba_ndx'] is not None else "n/a",
+                       f"{ba['beat_ndx']} of {ba['total']} beat NDX" if ba['ba_ndx'] is not None else None, delta_color="off")
+            bc3.metric("Batting avg vs S&P 500", f"{ba['ba_voo']:.0f}%" if ba['ba_voo'] is not None else "n/a",
+                       f"{ba['beat_voo']} of {ba['total']} beat VOO" if ba['ba_voo'] is not None else None, delta_color="off")
+            # per-holding beat/miss table
+            tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
+            brow = []
+            for r in sorted(ba["rows"], key=lambda x: (x['vs_ndx'] is None, -(x['vs_ndx'] or -999))):
+                brow.append({
+                    "Ticker": r['ticker'], "Tier": r['tier'],
+                    "Return": f"{r['ret']:+.1f}%",
+                    "vs NDX": f"{r['vs_ndx']:+.1f}" if r['vs_ndx'] is not None else "n/a",
+                    "Beat NDX": "✅" if r['beat_ndx'] else "—",
+                    "vs S&P": f"{r['vs_voo']:+.1f}" if r['vs_voo'] is not None else "n/a",
+                    "Beat S&P": "✅" if r['beat_voo'] else "—",
+                })
+            st.dataframe(pd.DataFrame(brow), use_container_width=True, hide_index=True, height=420)
+            st.caption(f"Benchmarks since inception: NDX {ndx_tot:+.1f}%" + (f" · S&P 500 (VOO) {voo_tot:+.1f}%" if voo_tot is not None else "")
+                       + ". A high batting average with lower active return (or vice versa) tells you whether performance is broad-based or driven by a few names.")
+        else:
+            st.warning("Not enough return data to compute batting average.")
+
+        # ===== Attribution (allocation + selection) =====
+        st.divider()
+        st.markdown("##### Attribution: Allocation vs Selection")
+        st.caption("Brinson-Fachler decomposition by tier, portfolio vs the equal-weighted bench (watchlist) universe. "
+                   "Allocation = did tier tilts help; Selection = did the names held beat the bench names in the same tier; "
+                   "Interaction = the combined effect. The three sum to active return vs the bench universe.")
+        with st.spinner("Fetching bench returns for attribution..."):
+            _bt = [b['ticker'] for b in ai_load_bench()]
+            _bp = ai_fetch_prices(tuple(_bt), AI_STRATEGY_INCEPTION)
+            bench_per = [{"tier": b['tier'], "ret_pct": _bp.get(b['ticker'], {}).get('ret_pct')} for b in ai_load_bench()]
+        attr_rows, attr_tot = ai_attribution_by_tier(per, bench_per)
+        ar = []
+        for r in attr_rows:
+            ar.append({
+                "Tier": r['tier'].replace("TIER ", "T").replace("HYPER", "Hyper"),
+                "Port Wt": f"{r['wp']:.1f}%", "Bench Wt": f"{r['wb']:.1f}%",
+                "Port Ret": f"{r['Rp']:+.1f}%", "Bench Ret": f"{r['Rb']:+.1f}%",
+                "Allocation": f"{r['alloc']:+.2f}", "Selection": f"{r['sel']:+.2f}",
+                "Interaction": f"{r['inter']:+.2f}", "Total": f"{r['total']:+.2f}",
+            })
+        ar.append({"Tier": "TOTAL", "Port Wt": "", "Bench Wt": "", "Port Ret": f"{attr_tot['Rp']:+.1f}%",
+                   "Bench Ret": f"{attr_tot['Rb']:+.1f}%", "Allocation": f"{attr_tot['alloc']:+.2f}",
+                   "Selection": f"{attr_tot['sel']:+.2f}", "Interaction": f"{attr_tot['inter']:+.2f}",
+                   "Total": f"{attr_tot['active']:+.2f}"})
+        st.dataframe(pd.DataFrame(ar), use_container_width=True, hide_index=True)
+        ac1, ac2, ac3 = st.columns(3)
+        ac1.metric("Allocation effect", f"{attr_tot['alloc']:+.2f}%", help="Value from over/underweighting tiers vs the bench universe.")
+        ac2.metric("Selection effect", f"{attr_tot['sel']:+.2f}%", help="Value from the specific names held vs bench names in the same tier.")
+        ac3.metric("Active vs bench", f"{attr_tot['active']:+.2f}%", help="Total active return vs the equal-weight bench universe (alloc+selection+interaction).")
+        st.caption("Note: this attribution is measured against the equal-weighted bench/watchlist universe (the names we track), "
+                   "not against NDX, because the bench can be cleanly segmented into the four tiers. NDX and VOO remain the "
+                   "return benchmarks for batting average and headline performance above.")
 
     # ---------------- MANAGE ----------------
     with ai_tabs[2]:
@@ -4252,6 +4449,87 @@ elif selected == "AI Strategy":
                 csv = edited.to_csv(index=False)
                 st.download_button("⬇️ Export CSV", csv, "ai_portfolio.csv", "text/csv", use_container_width=True)
 
+            # ----- Entry-target reference (read-only) -----
+            st.divider()
+            st.markdown("##### Entry Targets (optimal / secondary / do-not-exceed)")
+            st.caption("Limit-order guides per holding. Ceilings are forward-P/E anchored; 🔄 names re-rated on a recent event and need re-derivation.")
+            et_rows = []
+            tier_order_m = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
+            for h in sorted([hh for hh in holdings if (hh.get('target_weight') or 0) > 0],
+                            key=lambda x: (tier_order_m.get(x.get('tier'), 9), -(x.get('target_weight') or 0))):
+                t = AI_ENTRY_TARGETS.get(h['ticker'])
+                if not t:
+                    continue
+                et_rows.append({
+                    "Ticker": h['ticker'], "Tier": h.get('tier', ''),
+                    "Optimal": f"${t['optimal']:,.2f}", "Secondary": f"${t['secondary']:,.2f}",
+                    "Do-Not-Exceed": f"${t['ceiling']:,.2f}", "P/E Anchor": t.get('pe_anchor', ''),
+                    "Re-rate?": "🔄 refresh" if t.get('reval') else "—",
+                })
+            if et_rows:
+                st.dataframe(pd.DataFrame(et_rows), use_container_width=True, hide_index=True, height=420)
+
+            # ----- Share calculator -----
+            st.divider()
+            st.markdown("##### Share Calculator")
+            st.caption("Whole-share counts to reach each target weight, using live prices. This is a buy list for a fresh book; "
+                       "to compute buy/sell deltas against positions you already hold, enter your current shares in the right column.")
+            calc_notional = st.number_input("Portfolio size ($)", min_value=1000.0, value=float(AI_PORTFOLIO_NOTIONAL),
+                                            step=5000.0, key="ai_calc_notional")
+            show_deltas = st.checkbox("I already hold some of these (enter current shares to get buy/sell deltas)", value=False, key="ai_calc_deltas")
+            cur_holds = sorted([hh for hh in holdings if (hh.get('target_weight') or 0) > 0],
+                               key=lambda x: (tier_order_m.get(x.get('tier'), 9), -(x.get('target_weight') or 0)))
+            with st.spinner("Fetching live prices for the calculator..."):
+                calc_px = ai_fetch_prices(tuple(h['ticker'] for h in cur_holds), AI_STRATEGY_INCEPTION)
+            calc_seed = []
+            for h in cur_holds:
+                p = calc_px.get(h['ticker'], {}).get('price_now')
+                tgt_dollars = calc_notional * ((h.get('target_weight') or 0) / 100.0)
+                tgt_shares = int(tgt_dollars // p) if (p and p > 0) else 0
+                calc_seed.append({"Ticker": h['ticker'], "Tier": h.get('tier', ''),
+                                  "Target %": h.get('target_weight') or 0,
+                                  "Price": round(p, 2) if p else None,
+                                  "Target $": round(tgt_dollars, 0),
+                                  "Target Shares": tgt_shares,
+                                  "Current Shares": 0})
+            calc_df = pd.DataFrame(calc_seed)
+            if show_deltas:
+                edited_calc = st.data_editor(
+                    calc_df, use_container_width=True, hide_index=True, height=460, key="ai_calc_editor",
+                    column_config={
+                        "Ticker": st.column_config.TextColumn("Ticker", disabled=True),
+                        "Tier": st.column_config.TextColumn("Tier", disabled=True),
+                        "Target %": st.column_config.NumberColumn("Target %", disabled=True, format="%.1f"),
+                        "Price": st.column_config.NumberColumn("Price", disabled=True, format="$%.2f"),
+                        "Target $": st.column_config.NumberColumn("Target $", disabled=True, format="$%.0f"),
+                        "Target Shares": st.column_config.NumberColumn("Target Shares", disabled=True),
+                        "Current Shares": st.column_config.NumberColumn("Current Shares", min_value=0, step=1),
+                    })
+                deltas = []
+                for _, r in edited_calc.iterrows():
+                    tgt = int(r["Target Shares"]) if pd.notna(r["Target Shares"]) else 0
+                    cur = int(r["Current Shares"]) if pd.notna(r["Current Shares"]) else 0
+                    d = tgt - cur
+                    deltas.append({"Ticker": r["Ticker"], "Tier": r["Tier"],
+                                   "Target Shares": tgt, "Current Shares": cur,
+                                   "Action": "BUY" if d > 0 else ("SELL" if d < 0 else "HOLD"),
+                                   "Shares to Trade": abs(d),
+                                   "Trade $": f"${abs(d) * (r['Price'] or 0):,.0f}"})
+                st.markdown("**Buy / Sell to reach targets**")
+                st.dataframe(pd.DataFrame(deltas), use_container_width=True, hide_index=True, height=460)
+                st.download_button("⬇️ Download buy/sell list (CSV)", pd.DataFrame(deltas).to_csv(index=False),
+                                   "ai_buy_sell_list.csv", "text/csv")
+            else:
+                disp_calc = calc_df.drop(columns=["Current Shares"]).copy()
+                disp_calc["Price"] = disp_calc["Price"].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "n/a")
+                disp_calc["Target $"] = disp_calc["Target $"].apply(lambda x: f"${x:,.0f}")
+                disp_calc["Target %"] = disp_calc["Target %"].apply(lambda x: f"{x:.1f}%")
+                disp_calc["Target Shares"] = disp_calc["Target Shares"].apply(lambda x: f"{int(x):,}")
+                st.dataframe(disp_calc, use_container_width=True, hide_index=True, height=460)
+                _tot = sum((r["Target Shares"] * (r["Price"] or 0)) for r in calc_seed)
+                st.caption(f"Total deployed at target: ${_tot:,.0f} of ${calc_notional:,.0f} "
+                           f"(${calc_notional - _tot:,.0f} residual cash). Prices are live, so counts shift intraday.")
+
     # ---------------- BENCH ----------------
     with ai_tabs[3]:
         st.subheader("Bench & Watch List")
@@ -4408,6 +4686,48 @@ elif selected == "AI Strategy":
                         msg = em_claude_interpret(user_key, pick, heads, gap, ei)
                     st.markdown(msg)
                     st.caption("Interpretation only. Decision and conviction changes remain yours.")
+
+    # ---------------- TRANSACTIONS ----------------
+    with ai_tabs[8]:
+        st.subheader("Transactions — Rebalance")
+        st.caption(f"The rebalance, modeled as establishing every target position at the {AI_REBALANCE_DATE} market close on a ${AI_PORTFOLIO_NOTIONAL:,.0f} book. Whole shares, no fractional.")
+
+        txn_holdings = ai_load_portfolio()
+        with st.spinner(f"Fetching {AI_REBALANCE_DATE} close prices..."):
+            txn_rows, txn_tot = ai_build_transactions(txn_holdings, AI_REBALANCE_DATE, AI_PORTFOLIO_NOTIONAL)
+
+        tc1, tc2, tc3, tc4 = st.columns(4)
+        tc1.metric("Trade Date", AI_REBALANCE_DATE)
+        tc2.metric("Positions", f"{sum(1 for r in txn_rows if r['shares'])}")
+        tc3.metric("Invested", f"${txn_tot['invested']:,.0f}", f"{txn_tot['invested']/txn_tot['notional']*100:.1f}% of book")
+        tc4.metric("Residual Cash", f"${txn_tot['cash']:,.0f}", f"{txn_tot['cash']/txn_tot['notional']*100:.1f}%", delta_color="off")
+
+        tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
+        disp = []
+        for r in sorted(txn_rows, key=lambda x: (tier_order.get(x['tier'], 9), -(x['weight'] or 0))):
+            disp.append({
+                "Date": AI_REBALANCE_DATE, "Action": "BUY", "Ticker": r['ticker'], "Name": r['name'],
+                "Tier": r['tier'], "Target Wt": f"{r['weight']:.1f}%",
+                "Fill Price": f"${r['price']:,.2f}" if r['price'] else "n/a",
+                "Shares": f"{r['shares']:,}" if r['shares'] is not None else "n/a",
+                "Value": f"${r['value']:,.0f}" if r['value'] is not None else "n/a",
+                "% of Book": f"{(r['value']/txn_tot['notional']*100):.1f}%" if r['value'] is not None else "n/a",
+            })
+        st.dataframe(pd.DataFrame(disp), use_container_width=True, hide_index=True, height=560)
+
+        # downloadable trade blotter
+        blotter = pd.DataFrame([{
+            "trade_date": AI_REBALANCE_DATE, "action": "BUY", "ticker": r['ticker'],
+            "tier": r['tier'], "target_weight_pct": r['weight'], "fill_price": r['price'],
+            "shares": r['shares'], "trade_value": r['value']
+        } for r in txn_rows])
+        st.download_button("⬇️ Download trade blotter (CSV)", blotter.to_csv(index=False),
+                           f"ai_rebalance_blotter_{AI_REBALANCE_DATE}.csv", "text/csv")
+
+        st.caption("This models the rebalance as a fresh establishment of the target book at the "
+                   f"{AI_REBALANCE_DATE} close, consistent with funding the strategy from a VOO rotation. "
+                   "It does not separately show sells of any prior positions; if you want the from/to deltas "
+                   "against an existing book, add your current share counts and I can net them.")
 
 
 # ========================================
