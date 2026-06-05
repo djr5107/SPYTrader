@@ -561,8 +561,115 @@ def calculate_technical_indicators(df, periods=[10, 20, 50, 100, 200]):
         df['S1'] = 2 * df['Pivot'] - df['High']
         df['R2'] = df['Pivot'] + (df['High'] - df['Low'])
         df['S2'] = df['Pivot'] - (df['High'] - df['Low'])
-    
+
+    try:
+        _dir = (df['Close'].diff() > 0).astype(int) - (df['Close'].diff() < 0).astype(int)
+        df['OBV'] = (_dir * df['Volume']).fillna(0).cumsum()
+    except Exception:
+        pass
+    try:
+        for _ep in [12, 26, 50]:
+            df[f'EMA_{_ep}'] = df['Close'].ewm(span=_ep, adjust=False).mean()
+    except Exception:
+        pass
+
     return df
+
+
+# ---------- Technical scorecard: multi-indicator buy/sell/hold ----------
+def ta_scorecard(df):
+    """Evaluate a panel of technical indicators and return per-indicator signals
+    plus an aggregate buy/sell/hold verdict. Each indicator votes -1 (bearish),
+    0 (neutral), or +1 (bullish). Expects the columns from
+    calculate_technical_indicators (plus OBV/EMA added there)."""
+    if df is None or df.empty or len(df) < 30:
+        return None
+    last = df.iloc[-1]
+    px = float(last["Close"])
+    rows = []
+
+    def add(name, signal, detail):
+        rows.append({"indicator": name, "signal": signal, "detail": detail})
+
+    # RSI (14)
+    if "RSI" in df and not pd.isna(last["RSI"]):
+        rsi = float(last["RSI"])
+        sig = 1 if rsi < 30 else (-1 if rsi > 70 else 0)
+        add("RSI (14)", sig, f"{rsi:.0f} — {'oversold' if rsi<30 else ('overbought' if rsi>70 else 'neutral')}")
+
+    # MACD vs signal
+    if "MACD" in df and "MACD_Signal" in df and not pd.isna(last["MACD"]):
+        macd, sigl = float(last["MACD"]), float(last["MACD_Signal"])
+        sig = 1 if macd > sigl else (-1 if macd < sigl else 0)
+        add("MACD", sig, f"{'above' if macd>sigl else 'below'} signal line")
+
+    # Moving-average trend: price vs SMA50 / SMA200, and golden/death cross
+    if "SMA_50" in df and "SMA_200" in df and not pd.isna(last.get("SMA_200")):
+        s50, s200 = float(last["SMA_50"]), float(last["SMA_200"])
+        sig = 1 if (px > s50 and s50 > s200) else (-1 if (px < s50 and s50 < s200) else 0)
+        add("Trend (50/200 MA)", sig,
+            f"price {'>' if px>s50 else '<'} 50-MA, 50-MA {'>' if s50>s200 else '<'} 200-MA")
+    elif "SMA_50" in df and not pd.isna(last.get("SMA_50")):
+        s50 = float(last["SMA_50"])
+        sig = 1 if px > s50 else -1
+        add("Trend (50-MA)", sig, f"price {'above' if px>s50 else 'below'} 50-day MA")
+
+    # ADX: trend strength (direction from DI if present, else from MA slope)
+    if "ADX" in df and not pd.isna(last["ADX"]):
+        adx = float(last["ADX"])
+        # ADX measures strength, not direction; combine with short MA slope for direction
+        direction = 0
+        if "SMA_20" in df and len(df) > 22 and not pd.isna(df["SMA_20"].iloc[-1]) and not pd.isna(df["SMA_20"].iloc[-2]):
+            direction = 1 if df["SMA_20"].iloc[-1] > df["SMA_20"].iloc[-2] else -1
+        sig = direction if adx >= 25 else 0
+        add("ADX (trend strength)", sig,
+            f"{adx:.0f} — {'strong' if adx>=25 else 'weak/range'} trend" + (", rising" if sig>0 else (", falling" if sig<0 else "")))
+
+    # Stochastic %K/%D
+    if "Stoch_%K" in df and "Stoch_%D" in df and not pd.isna(last["Stoch_%K"]):
+        k, d = float(last["Stoch_%K"]), float(last["Stoch_%D"])
+        sig = 1 if (k < 20 and k > d) else (-1 if (k > 80 and k < d) else 0)
+        add("Stochastic", sig, f"%K {k:.0f}/%D {d:.0f} — {'oversold' if k<20 else ('overbought' if k>80 else 'mid')}")
+
+    # Bollinger position
+    if "BB_Upper" in df and "BB_Lower" in df and not pd.isna(last["BB_Upper"]):
+        u, l = float(last["BB_Upper"]), float(last["BB_Lower"])
+        sig = 1 if px <= l else (-1 if px >= u else 0)
+        add("Bollinger Bands", sig, f"{'at/below lower' if px<=l else ('at/above upper' if px>=u else 'within bands')}")
+
+    # OBV trend (volume confirmation)
+    if "OBV" in df and len(df) > 20 and not pd.isna(last.get("OBV")):
+        obv_now = float(last["OBV"]); obv_prev = float(df["OBV"].iloc[-20])
+        sig = 1 if obv_now > obv_prev else (-1 if obv_now < obv_prev else 0)
+        add("OBV (volume)", sig, f"{'accumulation' if sig>0 else ('distribution' if sig<0 else 'flat')} over 20d")
+
+    if not rows:
+        return None
+    score = sum(r["signal"] for r in rows)
+    n = len(rows)
+    # verdict thresholds scale with how many indicators we have
+    if score >= max(2, n * 0.34):
+        verdict = "BUY"
+    elif score <= -max(2, n * 0.34):
+        verdict = "SELL"
+    else:
+        verdict = "HOLD"
+    bull = sum(1 for r in rows if r["signal"] > 0)
+    bear = sum(1 for r in rows if r["signal"] < 0)
+    neut = sum(1 for r in rows if r["signal"] == 0)
+    return {"rows": rows, "score": score, "n": n, "verdict": verdict,
+            "bull": bull, "bear": bear, "neutral": neut}
+
+TA_GLOSSARY = [
+    ("RSI (Relative Strength Index)", "Momentum oscillator, 0–100. Below 30 = oversold (possible bounce); above 70 = overbought (possible pullback)."),
+    ("MACD", "Moving Average Convergence Divergence. Trend/momentum gauge; the MACD line crossing above its signal line is bullish, below is bearish."),
+    ("Moving Averages (50/200)", "Average price over 50 and 200 days. Price above both and 50 above 200 (a 'golden cross') signals an uptrend; the reverse ('death cross') signals a downtrend."),
+    ("ADX (Average Directional Index)", "Measures trend STRENGTH (not direction), 0–100. Above 25 = a strong trend worth following; below 20 = choppy/range-bound. We pair it with the 20-day MA slope for direction."),
+    ("Stochastic Oscillator", "Compares the close to its recent range, 0–100. Below 20 with %K crossing above %D = oversold buy setup; above 80 with %K below %D = overbought."),
+    ("Bollinger Bands", "Volatility bands two standard deviations around the 20-day average. Price riding the upper band can mean overbought; the lower band, oversold."),
+    ("ATR (Average True Range)", "Measures volatility (average daily range). Higher ATR = bigger swings; used for stop-loss and position sizing, not direction."),
+    ("OBV (On-Balance Volume)", "Running total of volume that adds on up days and subtracts on down days. Rising OBV confirms buying pressure (accumulation); falling confirms selling (distribution)."),
+]
 
 # Logging functions
 def log_trade(ts, typ, sym, action, size, entry, exit, pnl, status, sig_id, 
@@ -2387,37 +2494,92 @@ def home_curve_spreads(yc):
     return out
 
 # ---- Derived Fed rate-move probabilities from Fed Funds futures ----
+# ---------- Meeting-weighted Fed probabilities (CME FedWatch methodology) ----------
+# 2026 FOMC decision dates (second day of each meeting). Update annually.
+FOMC_2026 = ["2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+             "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-16"]
+
+def _next_fomc(today=None):
+    today = today or datetime.now(ZoneInfo("America/New_York")).date()
+    for d in FOMC_2026:
+        dd = datetime.strptime(d, "%Y-%m-%d").date()
+        if dd >= today:
+            return dd
+    return None
+
 @st.cache_data(ttl=3600)
 def home_fed_probabilities():
-    """Approximate probabilities for the next FOMC using 30-day Fed Funds
-    futures (ZQ). The futures price implies an average effective FF rate for the
-    contract month: implied_rate = 100 - price. Comparing the front-month implied
-    rate to the current target midpoint gives an expected move, which we translate
-    into cut / hold / hike probabilities. This mirrors the logic behind CME
-    FedWatch but is our own derivation, not CME's official figure."""
+    """Probabilities for the NEXT FOMC meeting using the CME FedWatch methodology:
+    a 30-day Fed Funds future settles to the month's average daily effective rate,
+    so the meeting-month contract blends the pre- and post-meeting rate by the
+    number of days each is in effect. We solve that blend for the implied
+    post-meeting rate, compare to the current target midpoint, and convert the
+    expected change into probabilities across the nearest 25 bps increments.
+
+    This is the same math CME publishes; it is computed here from the futures
+    curve (CME exposes no free API). The current target midpoint is inferred from
+    the front contract when no meeting falls earlier in the current month."""
     try:
-        # current target midpoint — approximate from the effective rate proxy.
-        # Use ^IRX (13-week T-bill discount) only as a sanity fallback.
-        # Front two Fed Funds futures months:
+        import calendar as _cal
+        meeting = _next_fomc()
+        if meeting is None:
+            return {}
         zq = yf.Ticker("ZQ=F")
-        h = zq.history(period="5d", interval="1d")
+        h = zq.history(period="10d", interval="1d")
         if h.empty:
             return {}
-        price = float(h["Close"].iloc[-1])
-        implied = 100 - price  # implied avg FF rate for the contract month (%)
-        # assume current target midpoint is the nearest 0.25 increment at/above implied-ish.
-        # We infer the active midpoint as the rounded implied to nearest 25 bps.
-        mid = round(implied * 4) / 4
-        move_bps = (implied - mid) * 100  # negative => market pricing cuts
-        # Translate expected move into probabilities with a simple, transparent map.
-        # A full 25 bps cut priced => ~100% cut; halfway => ~50%, etc.
-        p_cut = max(0.0, min(1.0, -move_bps / 25.0))
-        p_hike = max(0.0, min(1.0, move_bps / 25.0))
-        p_hold = max(0.0, 1.0 - p_cut - p_hike)
-        return {"implied_rate": round(implied, 3), "target_mid": round(mid, 3),
-                "move_bps": round(move_bps, 1),
-                "p_cut": round(p_cut * 100), "p_hold": round(p_hold * 100),
-                "p_hike": round(p_hike * 100), "front_price": round(price, 4)}
+        front_price = float(h["Close"].iloc[-1])
+        front_implied = 100.0 - front_price  # avg effective rate implied for the front month
+
+        # Infer current target midpoint: round the front implied to the nearest 25 bps.
+        cur_mid = round(front_implied * 4) / 4
+
+        # Intra-month weighting for the meeting month.
+        N = _cal.monthrange(meeting.year, meeting.month)[1]
+        d_eff = meeting.day + 1          # new rate effective the day after the decision
+        days_old = max(0, d_eff - 1)
+        days_new = max(1, N - days_old)
+
+        # If the next meeting is in the current (front) month, solve the front
+        # contract's monthly average for the post-meeting rate.
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        if meeting.month == today.month and meeting.year == today.year:
+            month_avg = front_implied
+            post_rate = (month_avg * N - days_old * cur_mid) / days_new
+        else:
+            # Meeting is in a later month: the front contract reflects the current
+            # rate; use the implied forward as the post-meeting estimate.
+            post_rate = front_implied
+
+        move = (post_rate - cur_mid) * 100.0  # bps, signed (negative = cut)
+
+        # Convert expected move into probabilities across 25 bps increments.
+        step = 25.0
+        steps = move / step  # e.g. -0.6 => 60% of a 25bp cut priced
+        probs = {"cut25": 0.0, "hold": 0.0, "hike25": 0.0, "cut50": 0.0, "hike50": 0.0}
+        if steps <= -1:
+            # between a 25 and 50 bps cut
+            frac = min(1.0, -steps - 1.0)
+            probs["cut50"] = round(frac * 100)
+            probs["cut25"] = round((1 - frac) * 100)
+        elif steps < 0:
+            probs["cut25"] = round(-steps * 100)
+            probs["hold"] = round((1 + steps) * 100)
+        elif steps == 0:
+            probs["hold"] = 100
+        elif steps < 1:
+            probs["hike25"] = round(steps * 100)
+            probs["hold"] = round((1 - steps) * 100)
+        else:
+            frac = min(1.0, steps - 1.0)
+            probs["hike50"] = round(frac * 100)
+            probs["hike25"] = round((1 - frac) * 100)
+
+        return {"meeting": meeting.strftime("%b %d, %Y"),
+                "implied_rate": round(post_rate, 3), "target_mid": round(cur_mid, 3),
+                "move_bps": round(move, 1), "front_price": round(front_price, 4),
+                "p_cut": probs["cut25"], "p_hold": probs["hold"], "p_hike": probs["hike25"],
+                "p_cut50": probs["cut50"], "p_hike50": probs["hike50"]}
     except Exception:
         return {}
 
@@ -2527,62 +2689,88 @@ AI_PORTFOLIO_ORIGINAL = [
 ]
 
 def ai_build_two_date_transactions(notional=AI_PORTFOLIO_NOTIONAL):
-    """Build the full transaction history:
-      1) 2/10 inception BUYs for the original 30 at 2/10 close prices.
-      2) 6/1 rebalance actions = diff between the original book and the current
-         book (ai_load_portfolio), priced at the 6/1 close.
+    """Two-date transaction model with DRIFT-based rebalancing:
+      1) 2/10 inception BUYs (original 30 at the 2/10 close).
+      2) 6/1 rebalance = bring every position back to its current target weight,
+         accounting for price drift since inception. A name that appreciated to
+         above its target (e.g. Dell drifting to ~7.4%) is TRIMMED back; one that
+         lagged is ADDED to; dropped names are SOLD; new names are BOUGHT.
     Returns (inception_rows, rebalance_rows, summary)."""
     orig = {tk: {"name": nm, "tier": ti, "w": w} for tk, nm, ti, w in AI_PORTFOLIO_ORIGINAL}
     cur_holdings = ai_load_portfolio()
     cur = {h["ticker"]: {"name": h.get("name", h["ticker"]), "tier": h.get("tier", ""),
                          "w": (h.get("target_weight") or 0)} for h in cur_holdings if (h.get("target_weight") or 0) > 0}
 
-    # ---- 1) Inception buys (2/10) ----
-    px_inception = ai_prices_on_date(tuple(orig.keys()), AI_INCEPTION_DATE)
+    # ---- 1) Inception buys at 2/10 ----
+    px0 = ai_prices_on_date(tuple(orig.keys()), AI_INCEPTION_DATE)
     inception_rows = []
     inv0 = 0.0
+    shares0 = {}
     for tk, d in orig.items():
-        p = px_inception.get(tk)
+        p = px0.get(tk)
         dollars = notional * (d["w"] / 100.0)
-        shares = int(dollars // p) if (p and p > 0) else None
-        val = shares * p if (shares is not None and p) else None
+        sh = int(dollars // p) if (p and p > 0) else None
+        shares0[tk] = sh or 0
+        val = (sh * p) if (sh is not None and p) else None
         if val:
             inv0 += val
         inception_rows.append({"date": AI_INCEPTION_DATE, "action": "BUY", "ticker": tk,
                                "name": d["name"], "tier": d["tier"], "weight": d["w"],
-                               "price": p, "shares": shares, "value": val})
+                               "price": p, "shares": sh, "value": val})
 
-    # ---- 2) 6/1 rebalance actions (diff orig -> current) ----
+    # ---- 2) Value the inception book at 6/1 to get DRIFTED weights ----
     all_tk = sorted(set(orig) | set(cur))
-    reb_tk = [tk for tk in all_tk if abs(orig.get(tk, {}).get("w", 0) - cur.get(tk, {}).get("w", 0)) > 1e-9]
-    px_reb = ai_prices_on_date(tuple(reb_tk), AI_REBALANCE_DATE) if reb_tk else {}
+    px1 = ai_prices_on_date(tuple(all_tk), AI_REBALANCE_DATE)
+    # portfolio value at 6/1 (original shares at 6/1 prices)
+    pv1 = 0.0
+    drift_val = {}
+    for tk in orig:
+        p = px1.get(tk)
+        v = (shares0.get(tk, 0) * p) if p else 0.0
+        drift_val[tk] = v
+        pv1 += v
+    if pv1 <= 0:
+        pv1 = notional  # fallback so we don't divide by zero
+
     rebalance_rows = []
     for tk in all_tk:
-        ow = orig.get(tk, {}).get("w", 0.0)
-        cw = cur.get(tk, {}).get("w", 0.0)
-        if abs(ow - cw) < 1e-9:
-            continue
+        ow = orig.get(tk, {}).get("w", 0.0)          # original target
+        cw = cur.get(tk, {}).get("w", 0.0)           # current target
         nm = (cur.get(tk) or orig.get(tk) or {}).get("name", tk)
         ti = (cur.get(tk) or orig.get(tk) or {}).get("tier", "")
-        if ow == 0:
+        p = px1.get(tk)
+        drift_w = (drift_val.get(tk, 0.0) / pv1 * 100.0) if tk in orig else 0.0  # weight at 6/1 before rebalance
+
+        # classify
+        if ow == 0 and cw > 0:
             action = "BUY (new)"
-        elif cw == 0:
+        elif cw == 0 and ow > 0:
             action = "SELL (exit)"
-        elif cw < ow:
-            action = "TRIM"
         else:
-            action = "ADD"
-        p = px_reb.get(tk)
+            # held in both: compare DRIFTED weight to the current target
+            if drift_w - cw > 0.25:          # drifted above target by >0.25pp -> trim
+                action = "TRIM"
+            elif cw - drift_w > 0.25:         # below target -> add
+                action = "ADD"
+            else:
+                action = None                 # already on target, no trade
+
+        if action is None:
+            continue
+
+        # share delta: target dollars at current weight vs current (drifted) dollars
+        target_dollars = notional * (cw / 100.0)
+        cur_dollars = drift_val.get(tk, 0.0) if tk in orig else 0.0
         dShares = None; dVal = None
         if p and p > 0:
-            # approximate share change from the weight delta on the notional
-            dShares = int(round((cw - ow) / 100.0 * notional / p))
+            dShares = int(round((target_dollars - cur_dollars) / p))
             dVal = dShares * p
         rebalance_rows.append({"date": AI_REBALANCE_DATE, "action": action, "ticker": tk,
-                               "name": nm, "tier": ti, "from_w": ow, "to_w": cw,
-                               "price": p, "shares": dShares, "value": dVal})
+                               "name": nm, "tier": ti, "from_w": (drift_w if tk in orig else 0.0),
+                               "target_w": cw, "orig_w": ow, "price": p,
+                               "shares": dShares, "value": dVal})
 
-    summary = {"inception_invested": inv0, "notional": notional,
+    summary = {"inception_invested": inv0, "notional": notional, "pv_at_rebalance": pv1,
                "n_inception": len([r for r in inception_rows if r["shares"]]),
                "n_sell": len([r for r in rebalance_rows if r["action"].startswith("SELL")]),
                "n_trim": len([r for r in rebalance_rows if r["action"] == "TRIM"]),
@@ -2639,31 +2827,31 @@ def fred_macro_board():
     board = {}
 
     # ---- Labor ----
-    icsa = fred_csv("ICSA", "2022-01-01")
+    icsa = fred_series("ICSA", "2022-01-01")
     if icsa:
         cur, prev = _latest_two(icsa)
         board["Initial Jobless Claims"] = {
             "value": f"{cur[1]:,.0f}", "asof": cur[0],
             "sub": (f"{(cur[1]-prev[1]):+,.0f} wk/wk" if prev else "weekly")}
-    ccsa = fred_csv("CCSA", "2022-01-01")
+    ccsa = fred_series("CCSA", "2022-01-01")
     if ccsa:
         cur, prev = _latest_two(ccsa)
         board["Continuing Claims"] = {
             "value": f"{cur[1]:,.0f}", "asof": cur[0],
             "sub": (f"{(cur[1]-prev[1]):+,.0f} wk/wk" if prev else "weekly")}
-    pay = fred_csv("PAYEMS", "2022-01-01")
+    pay = fred_series("PAYEMS", "2022-01-01")
     if pay:
         cur, prev = _latest_two(pay)
         board["Nonfarm Payrolls (MoM)"] = {
             "value": (f"{(cur[1]-prev[1])*1000:+,.0f}" if prev else f"{cur[1]*1000:,.0f}"),
             "asof": cur[0], "sub": "jobs added, monthly"}
-    unrate = fred_csv("UNRATE", "2022-01-01")
+    unrate = fred_series("UNRATE", "2022-01-01")
     if unrate:
         cur, prev = _latest_two(unrate)
         board["Unemployment Rate"] = {
             "value": f"{cur[1]:.1f}%", "asof": cur[0],
             "sub": (f"{(cur[1]-prev[1]):+.1f}pp" if prev else "monthly")}
-    jolts = fred_csv("JTSJOL", "2022-01-01")
+    jolts = fred_series("JTSJOL", "2022-01-01")
     if jolts:
         cur, prev = _latest_two(jolts)
         board["Job Openings (JOLTS)"] = {
@@ -2702,18 +2890,18 @@ def fred_sentiment_board():
     except Exception:
         pass
     # Michigan consumer sentiment (FRED)
-    um = fred_csv("UMCSENT", "2022-01-01")
+    um = fred_series("UMCSENT", "2022-01-01")
     if um:
         cur, prev = _latest_two(um)
         board["U. Michigan Sentiment"] = {"value": f"{cur[1]:.1f}", "asof": cur[0],
                                           "sub": (f"{(cur[1]-prev[1]):+.1f} m/m" if prev else "monthly")}
     # OECD confidence proxies (FRED)
-    bc = fred_csv("BSCICP03USM665S", "2022-01-01")
+    bc = fred_series("BSCICP03USM665S", "2022-01-01")
     if bc:
         cur, prev = _latest_two(bc)
         board["Business Confidence (OECD)"] = {"value": f"{cur[1]:.1f}", "asof": cur[0],
                                                "sub": "OECD US, 100=avg"}
-    cc = fred_csv("CSCICP03USM665S", "2022-01-01")
+    cc = fred_series("CSCICP03USM665S", "2022-01-01")
     if cc:
         cur, prev = _latest_two(cc)
         board["Consumer Confidence (OECD)"] = {"value": f"{cur[1]:.1f}", "asof": cur[0],
@@ -2733,7 +2921,7 @@ def fred_yield_curve():
     latest = []; prior = []; latest_date = None; prior_date = None
     series_cache = {}
     for sid, lab in FRED_CURVE:
-        s = fred_csv(sid, "2024-01-01")
+        s = fred_series(sid, "2024-01-01")
         series_cache[lab] = s
         if s:
             latest.append((lab, s[-1][1]))
@@ -2802,10 +2990,46 @@ NEWS_ASSET_KW = {
                                   "metal", "natural gas", "silver", "wheat", "real estate", "reit"],
 }
 
+import email.utils as _eut
+
+def _parse_news_date(it):
+    """Extract a timezone-aware datetime from an RSS <pubDate> (RFC822) or Atom
+    <published>/<updated> (ISO8601). Returns datetime or None."""
+    for ch in it:
+        ct = ch.tag.lower()
+        if ct.endswith("pubdate") or ct.endswith("date") or ct.endswith("published") or ct.endswith("updated"):
+            txt = (ch.text or "").strip()
+            if not txt:
+                continue
+            # RFC822 (WSJ/CNBC/AP): "Wed, 04 Jun 2026 13:22:00 GMT"
+            try:
+                dt = _eut.parsedate_to_datetime(txt)
+                if dt is not None:
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                    return dt
+            except Exception:
+                pass
+            # ISO8601 (Atom/Economist): "2026-06-04T13:22:00Z"
+            try:
+                iso = txt.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                return dt
+            except Exception:
+                pass
+    return None
+
 @st.cache_data(ttl=900)
-def home_news_pool():
-    """Fetch all quality feeds once, drop fluff, return [(title, source, link)]."""
-    items = []
+def home_news_pool(max_age_hours=24):
+    """Fetch quality feeds, drop fluff, and keep only items published within
+    max_age_hours. Returns [(title, source, link, iso_dt)] sorted newest-first.
+    If no items carry parseable dates (feed quirk), falls back to the newest
+    available rather than showing nothing, with dates left blank."""
+    now = datetime.now(ZoneInfo("UTC"))
+    dated = []      # (dt, title, source, link)
+    undated = []    # (title, source, link)
     for url, source in HOME_QUALITY_FEEDS:
         try:
             req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -2821,36 +3045,65 @@ def home_news_pool():
                             title = (ch.text or "").strip()
                         if ct.endswith("link") and link is None:
                             link = (ch.text or "").strip() or ch.get("href")
-                    if title and len(title) > 12:
-                        low = title.lower()
-                        if not any(f in low for f in NEWS_FLUFF):
-                            items.append((title, source, link))
+                    if not (title and len(title) > 12):
+                        continue
+                    low = title.lower()
+                    if any(f in low for f in NEWS_FLUFF):
+                        continue
+                    dt = _parse_news_date(it)
+                    if dt is not None:
+                        dated.append((dt, title, source, link))
+                    else:
+                        undated.append((title, source, link))
         except Exception:
             continue
-    seen = set(); uniq = []
-    for t, s, l in items:
+    # de-dup by title prefix
+    seen = set()
+    fresh = []
+    for dt, t, s, l in sorted(dated, key=lambda x: x[0], reverse=True):
+        k = t.lower()[:60]
+        if k in seen:
+            continue
+        seen.add(k)
+        age_h = (now - dt).total_seconds() / 3600.0
+        if age_h <= max_age_hours:
+            fresh.append((t, s, l, dt.astimezone(ZoneInfo("America/New_York")).strftime("%b %d %I:%M%p")))
+    if fresh:
+        return fresh
+    # fallback 1: most recent dated items even if >24h (so the panel isn't empty)
+    if dated:
+        out = []
+        for dt, t, s, l in sorted(dated, key=lambda x: x[0], reverse=True)[:40]:
+            k = t.lower()[:60]
+            if k in seen and out:
+                continue
+            seen.add(k)
+            out.append((t, s, l, dt.astimezone(ZoneInfo("America/New_York")).strftime("%b %d %I:%M%p")))
+        return out
+    # fallback 2: undated
+    out = []
+    for t, s, l in undated:
         k = t.lower()[:60]
         if k not in seen:
-            seen.add(k); uniq.append((t, s, l))
-    return uniq
+            seen.add(k); out.append((t, s, l, ""))
+    return out
 
-def home_news_categorized(lens, per_bucket=4):
-    """Bucket the pooled headlines by keyword. Factors allow multi-bucket; Asset
-    Classes assign each headline to its single best-matching class. Returns
-    dict bucket -> [(title, source, link)]."""
-    pool = home_news_pool()
+def home_news_categorized(lens, per_bucket=4, max_age_hours=24):
+    """Bucket fresh (<=24h) headlines by keyword. Factors allow multi-bucket;
+    Asset Classes assign each headline to its single best class."""
+    pool = home_news_pool(max_age_hours)
     kw = NEWS_FACTOR_KW if lens == "Factors" else NEWS_ASSET_KW
     out = {b: [] for b in kw}
     if lens == "Factors":
-        for title, source, link in pool:
+        for title, source, link, when in pool:
             low = title.lower()
             for b, words in kw.items():
                 if len(out[b]) >= per_bucket:
                     continue
                 if any(w in low for w in words):
-                    out[b].append((title, source, link))
+                    out[b].append((title, source, link, when))
     else:
-        for title, source, link in pool:
+        for title, source, link, when in pool:
             low = title.lower()
             best, best_score = None, 0
             for b, words in kw.items():
@@ -2858,8 +3111,48 @@ def home_news_categorized(lens, per_bucket=4):
                 if score > best_score:
                     best, best_score = b, score
             if best and len(out[best]) < per_bucket:
-                out[best].append((title, source, link))
+                out[best].append((title, source, link, when))
     return out
+
+# ---------- FRED: official API (key) with CSV fallback ----------
+def _fred_key():
+    """Read a FRED API key from Streamlit secrets or a session-pasted key.
+    Returns '' if none configured."""
+    try:
+        k = st.secrets.get("FRED_API_KEY", "")
+        if k:
+            return k
+    except Exception:
+        pass
+    return st.session_state.get("user_fred_key", "")
+
+@st.cache_data(ttl=3600)
+def fred_series(series_id, start="2018-01-01", _key=""):
+    """Fetch a FRED series, preferring the official API (more reliable from cloud
+    IPs) and falling back to the no-key CSV endpoint. Returns [(date,value)]."""
+    key = _key or _fred_key()
+    if key:
+        try:
+            url = (f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}"
+                   f"&api_key={key}&file_type=json&observation_start={start}&sort_order=asc")
+            req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with _urlreq.urlopen(req, timeout=20) as r:
+                js = json.loads(r.read())
+            out = []
+            for o in js.get("observations", []):
+                v = o.get("value")
+                if v in ("", ".", None):
+                    continue
+                try:
+                    out.append((o["date"], float(v)))
+                except Exception:
+                    pass
+            if out:
+                return out
+        except Exception:
+            pass
+    # fallback: CSV endpoint (no key)
+    return fred_csv(series_id, start)
 
 
 # ===== Home market snapshot chart (added v9) =====
@@ -2948,19 +3241,20 @@ if selected == "Home":
                 continue
             any_news = True
             st.markdown(f"**{b}**")
-            for title, source, link in items:
+            for title, source, link, when in items:
+                meta = f"· {source}" + (f" · {when}" if when else "")
                 if link:
-                    st.markdown(f"- [{title}]({link})  <span style='color:#8a93a3;font-size:.72rem'>· {source}</span>",
+                    st.markdown(f"- [{title}]({link})  <span style='color:#8a93a3;font-size:.72rem'>{meta}</span>",
                                 unsafe_allow_html=True)
                 else:
-                    st.markdown(f"- {title}  <span style='color:#8a93a3;font-size:.72rem'>· {source}</span>",
+                    st.markdown(f"- {title}  <span style='color:#8a93a3;font-size:.72rem'>{meta}</span>",
                                 unsafe_allow_html=True)
         if not any_news:
             st.info("Headlines are temporarily unavailable (news feeds unreachable). Market data above is unaffected.")
         st.caption("Headlines from quality public RSS feeds (WSJ, The Economist, CNBC, AP), filtered to drop "
                    "advertorial/personal-finance fluff and bucketed by topic via keyword match. WSJ/Economist links "
                    "open in your browser, so your own logins handle the paywall. Asset-class items are assigned to their "
-                   "best-matching class, not just the source section.")
+                   "best-matching class, not just the source section. Showing items from roughly the last 24 hours.")
 
     with right:
         st.markdown("#### Market Snapshot")
@@ -2979,16 +3273,18 @@ if selected == "Home":
         st.divider()
 
         st.markdown("#### Rates & the Fed")
-        # Fed probabilities (derived)
+        # Fed probabilities (CME FedWatch methodology, computed from futures)
         fed = home_fed_probabilities()
         if fed:
-            st.markdown("**Next FOMC — implied move** <span style='color:#8a93a3;font-size:.7rem'>(derived from Fed Funds futures)</span>", unsafe_allow_html=True)
+            st.markdown(f"**FOMC {fed.get('meeting','')} — implied** <span style='color:#8a93a3;font-size:.7rem'>(CME method, from Fed Funds futures)</span>", unsafe_allow_html=True)
             fc1, fc2, fc3 = st.columns(3)
-            fc1.metric("Cut", f"{fed['p_cut']}%")
+            fc1.metric("Cut 25", f"{fed['p_cut']}%")
             fc2.metric("Hold", f"{fed['p_hold']}%")
-            fc3.metric("Hike", f"{fed['p_hike']}%")
-            st.caption(f"Front Fed Funds future implies ~{fed['implied_rate']:.2f}% avg vs ~{fed['target_mid']:.2f}% target "
-                       f"({fed['move_bps']:+.0f} bps). Derived, not CME's official FedWatch figure.")
+            fc3.metric("Hike 25", f"{fed['p_hike']}%")
+            if fed.get('p_cut50') or fed.get('p_hike50'):
+                st.caption(f"Tail: 50 bps cut {fed.get('p_cut50',0)}% · 50 bps hike {fed.get('p_hike50',0)}%")
+            st.caption(f"Implies ~{fed['implied_rate']:.2f}% post-meeting vs ~{fed['target_mid']:.2f}% now "
+                       f"({fed['move_bps']:+.0f} bps). Meeting-date-weighted; derived, not CME's published figure.")
         else:
             st.info("Fed-futures probabilities temporarily unavailable.")
 
@@ -4212,6 +4508,27 @@ elif selected == "Chart Analysis":
                     s5.metric(f"{period} Return", f"{pret:+.1f}%")
                 except Exception:
                     s5.metric(f"{period} Return", "n/a")
+
+                # ----- Technical scorecard (buy/sell/hold) -----
+                sc = ta_scorecard(df)
+                if sc:
+                    vcolor = {"BUY": "#22c55e", "SELL": "#ef4444", "HOLD": "#eab308"}[sc["verdict"]]
+                    st.markdown(
+                        f"<div style='border:1px solid #2a2f3a;border-radius:8px;padding:10px 14px;margin:8px 0;'>"
+                        f"<span style='font-size:.8rem;color:#9aa4b2'>Technical signal</span><br>"
+                        f"<span style='font-size:1.5rem;font-weight:700;color:{vcolor}'>{sc['verdict']}</span> "
+                        f"<span style='color:#9aa4b2;font-size:.85rem'>· {sc['bull']} bullish / {sc['bear']} bearish / {sc['neutral']} neutral "
+                        f"(score {sc['score']:+d})</span></div>", unsafe_allow_html=True)
+                    sig_map = {1: "🟢 Bullish", 0: "⚪ Neutral", -1: "🔴 Bearish"}
+                    srows = [{"Indicator": r["indicator"], "Signal": sig_map[r["signal"]], "Reading": r["detail"]}
+                             for r in sc["rows"]]
+                    st.dataframe(pd.DataFrame(srows), use_container_width=True, hide_index=True)
+                    st.caption("Each indicator votes bullish/bearish/neutral; the verdict is the net. This is a "
+                               "mechanical read of price/volume momentum and trend, not a recommendation — combine with "
+                               "fundamentals and your entry targets.")
+                    with st.expander("📖 What do these indicators mean?"):
+                        for term, desc in TA_GLOSSARY:
+                            st.markdown(f"**{term}** — {desc}")
 
                 # if this symbol is an AI holding, surface its entry targets
                 t_tgt = AI_ENTRY_TARGETS.get(chosen)
@@ -5529,14 +5846,16 @@ elif selected == "AI Strategy":
             for r in sorted(reb_rows, key=lambda x: (action_order.get(x['action'], 9), x['ticker'])):
                 reb_disp.append({"Date": r['date'], "Action": r['action'], "Ticker": r['ticker'],
                                  "Name": r['name'], "Tier": r['tier'],
-                                 "From": f"{r['from_w']:.1f}%", "To": f"{r['to_w']:.1f}%",
+                                 "Drifted Wt": f"{r['from_w']:.1f}%", "Target Wt": f"{r['target_w']:.1f}%",
                                  "Fill Price": f"${r['price']:,.2f}" if r['price'] else "n/a",
                                  "Δ Shares": (f"{r['shares']:+,}" if r['shares'] is not None else "n/a"),
                                  "Δ Value": (f"${r['value']:+,.0f}" if r['value'] is not None else "n/a")})
             st.dataframe(pd.DataFrame(reb_disp), use_container_width=True, hide_index=True, height=320)
-            st.caption("SELL = full exit, TRIM = reduce, ADD = increase, BUY (new) = new position. "
-                       "Δ Shares/Value approximate the change from the weight delta on the $100k book at the 6/1 close. "
-                       "BABA and HPE exited; NEE trimmed on the Dominion-deal affordability risk; PANW, ARM, SO added.")
+            st.caption("Drifted Wt = each position's weight at the 6/1 close after price moves since 2/10; "
+                       "Target Wt = its current target. TRIM = sell back to target (e.g. winners like Dell that drifted "
+                       "above weight), ADD = buy up to target, SELL = full exit, BUY (new) = new position. "
+                       "Δ Shares/Value are the trade to return to target at the 6/1 close. BABA and HPE exited; "
+                       "NEE trimmed on the Dominion-deal affordability risk; PANW, ARM, SO added.")
         else:
             st.info("No rebalance changes detected between the original book and the current holdings.")
 
@@ -5548,7 +5867,7 @@ elif selected == "AI Strategy":
                          "shares": r['shares'], "value": r['value']})
         for r in reb_rows:
             blot.append({"date": r['date'], "action": r['action'], "ticker": r['ticker'],
-                         "tier": r['tier'], "from_weight": r['from_w'], "to_weight": r['to_w'],
+                         "tier": r['tier'], "drifted_weight": r['from_w'], "target_weight": r['target_w'],
                          "fill_price": r['price'], "share_delta": r['shares'], "value_delta": r['value']})
         st.download_button("⬇️ Download full transaction blotter (CSV)", pd.DataFrame(blot).to_csv(index=False),
                            "ai_transactions_full.csv", "text/csv")
@@ -5620,14 +5939,17 @@ elif selected == "Macro Dashboard":
         st.markdown("**Fed: implied next move** <span style='color:#8a93a3;font-size:.72rem'>(derived from Fed Funds futures)</span>", unsafe_allow_html=True)
         fed = home_fed_probabilities()
         if fed:
+            st.caption(f"Next meeting: {fed.get('meeting','')}")
             fc1, fc2, fc3 = st.columns(3)
-            fc1.metric("Cut", f"{fed['p_cut']}%")
+            fc1.metric("Cut 25", f"{fed['p_cut']}%")
             fc2.metric("Hold", f"{fed['p_hold']}%")
-            fc3.metric("Hike", f"{fed['p_hike']}%")
-            st.caption(f"Front Fed Funds future implies ~{fed['implied_rate']:.2f}% average effective rate vs an "
-                       f"assumed ~{fed['target_mid']:.2f}% target midpoint ({fed['move_bps']:+.0f} bps of expected drift). "
-                       "This is our own derivation from the futures curve, not CME FedWatch's official published probability. "
-                       "It reflects the front contract only; for a specific meeting date the contract-month weighting matters.")
+            fc3.metric("Hike 25", f"{fed['p_hike']}%")
+            if fed.get('p_cut50') or fed.get('p_hike50'):
+                st.caption(f"Tail risk: 50 bps cut {fed.get('p_cut50',0)}% · 50 bps hike {fed.get('p_hike50',0)}%")
+            st.caption(f"The meeting-month Fed Funds future implies ~{fed['implied_rate']:.2f}% post-meeting effective rate "
+                       f"vs ~{fed['target_mid']:.2f}% now ({fed['move_bps']:+.0f} bps). Computed with the CME FedWatch "
+                       "methodology (meeting-date-weighted futures), but derived here from the futures curve, not CME's "
+                       "published figure (CME exposes no free API).")
             st.markdown("[CME FedWatch (official)](https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html) · "
                         "[Treasury yield curve](https://www.ustreasuryyieldcurve.com/)")
         else:
@@ -5637,6 +5959,15 @@ elif selected == "Macro Dashboard":
     st.divider()
     st.subheader("Economic Data")
     st.caption("Latest releases from FRED (Federal Reserve Bank of St. Louis). Inflation shown year-over-year; claims weekly; payrolls/JOLTS monthly.")
+    if not _fred_key():
+        with st.expander("⚙️ FRED data not loading? Add a free API key"):
+            st.markdown("FRED's no-key CSV endpoint can be throttled on shared cloud IPs. For reliable data, get a "
+                        "free key at [fredaccount.stlouisfed.org](https://fredaccount.stlouisfed.org/apikeys) and either "
+                        "add it to Streamlit secrets as `FRED_API_KEY`, or paste it below for this session.")
+            _k = st.text_input("FRED API key (this session only)", type="password", key="fred_key_input")
+            if _k:
+                st.session_state["user_fred_key"] = _k
+                st.success("Key set for this session. Refresh the data below.")
     with st.spinner("Fetching FRED economic series..."):
         eco = fred_macro_board()
     if eco:
