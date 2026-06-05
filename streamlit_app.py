@@ -353,50 +353,22 @@ def init_session_state():
 # Initialize everything
 init_session_state()
 
-# Settings (Sidebar)
-with st.sidebar:
-    st.header("⚙️ Settings")
-    
-    # Trading Mode
-    st.subheader("Trading Mode")
-    TRADING_MODE = st.radio("Mode", ["Paper Trading", "Live Trading"], help="Paper = Simulated, Live = Real money")
-    
-    # Signal Generation Settings
-    st.subheader("Signal Generation")
-    MIN_CONVICTION = st.slider("Min Conviction", 1, 10, 5, help="Minimum conviction level to show signals")
-    ENABLE_MACRO_FILTER = st.checkbox("Macro Signal Filter", value=True, help="Use macro conditions to filter signals")
-    USE_DYNAMIC_STOPS = st.checkbox("Dynamic Position Sizing", value=True, help="Adjust position size based on conviction")
-    SIGNAL_EXPIRATION_MINUTES = st.slider("Signal Expiration (min)", 10, 120, DEFAULT_SIGNAL_EXPIRATION, help="Minutes before signal expires")
-    
-    # V3.0: New signal types toggles
-    st.subheader("Signal Types")
-    ENABLE_CONTINUATION_SIGNALS = st.checkbox("Continuation Signals", value=True, help="Add to existing trends")
-    ENABLE_SUPPORT_RESISTANCE = st.checkbox("Support/Resistance", value=True, help="Bounce signals at key levels")
-    ENABLE_OPTIONS_SIGNALS = st.checkbox("Options Signals", value=True, help="Options trade opportunities")
-    ENABLE_TREND_FOLLOWING = st.checkbox("Trend Following", value=True, help="Follow strong trends")
-    ENABLE_MEAN_REVERSION = st.checkbox("Mean Reversion", value=True, help="Bollinger band bounces")
-    
-    # Stop Loss Settings
-    st.subheader("Risk Management")
-    STOP_LOSS_PCT = st.slider("Stop Loss %", -5.0, -0.5, -2.0, 0.5)
-    TRAILING_STOP_PCT = st.slider("Trailing Stop %", 0.5, 3.0, 1.0, 0.5)
-    
-    # Data Persistence
-    st.subheader("Data Management")
-    if st.button("💾 Force Save All Data"):
-        save_all_data()
-        st.success("✅ All data saved!")
-    
-    if st.button("🗑️ Clear All History"):
-        if st.checkbox("Confirm clear all"):
-            st.session_state.signal_history = []
-            st.session_state.trade_log = pd.DataFrame(columns=['Timestamp', 'Type', 'Symbol', 'Action', 'Size', 'Entry', 'Exit', 'P&L'])
-            save_all_data()
-            st.success("History cleared!")
-    
-    st.divider()
-    st.caption(f"DJR Trading System | {TRADING_MODE}")
-    st.caption(f"Last Save: {st.session_state.last_save.strftime('%H:%M:%S')}")
+
+# Trading settings now live in the Trading Hub page (not the global sidebar).
+# Module-level defaults so signal functions always have values regardless of page.
+TRADING_MODE = "Paper Trading"
+MIN_CONVICTION = 5
+ENABLE_MACRO_FILTER = True
+USE_DYNAMIC_STOPS = True
+SIGNAL_EXPIRATION_MINUTES = DEFAULT_SIGNAL_EXPIRATION
+ENABLE_CONTINUATION_SIGNALS = True
+ENABLE_SUPPORT_RESISTANCE = True
+ENABLE_OPTIONS_SIGNALS = True
+ENABLE_TREND_FOLLOWING = True
+ENABLE_MEAN_REVERSION = True
+STOP_LOSS_PCT = -2.0
+TRAILING_STOP_PCT = 1.0
+
 
 # Save all data function
 def save_all_data():
@@ -2530,6 +2502,277 @@ def home_news(bucket, limit=5):
 
 
 
+# ===== FRED, sentiment, improved news (added v8) =====
+@st.cache_data(ttl=3600)
+def fred_csv(series_id, start="2018-01-01"):
+    """Fetch a FRED series via the public CSV endpoint (no API key required).
+    Returns a list of (date_str, float_value) oldest->newest, or [] on failure."""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}&cosd={start}"
+    try:
+        req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with _urlreq.urlopen(req, timeout=20) as r:
+            raw = r.read().decode("utf-8", "replace")
+        out = []
+        for line in raw.splitlines()[1:]:
+            parts = line.split(",")
+            if len(parts) < 2:
+                continue
+            d, v = parts[0], parts[1]
+            if v in ("", ".", "null"):
+                continue
+            try:
+                out.append((d, float(v)))
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return []
+
+def _latest_two(series):
+    if not series:
+        return None, None
+    if len(series) == 1:
+        return series[-1], None
+    return series[-1], series[-2]
+
+def _yoy(series):
+    """Year-over-year % change from a monthly index series (latest vs ~12 obs prior)."""
+    if not series or len(series) < 13:
+        return None
+    latest = series[-1][1]
+    prior = series[-13][1]
+    return (latest / prior - 1) * 100 if prior else None
+
+@st.cache_data(ttl=3600)
+def fred_macro_board():
+    """Assemble the macro data board: labor, inflation, activity. Each entry is
+    {label: {value, units, asof, sub}} computed from FRED CSV series."""
+    board = {}
+
+    # ---- Labor ----
+    icsa = fred_csv("ICSA", "2022-01-01")
+    if icsa:
+        cur, prev = _latest_two(icsa)
+        board["Initial Jobless Claims"] = {
+            "value": f"{cur[1]:,.0f}", "asof": cur[0],
+            "sub": (f"{(cur[1]-prev[1]):+,.0f} wk/wk" if prev else "weekly")}
+    ccsa = fred_csv("CCSA", "2022-01-01")
+    if ccsa:
+        cur, prev = _latest_two(ccsa)
+        board["Continuing Claims"] = {
+            "value": f"{cur[1]:,.0f}", "asof": cur[0],
+            "sub": (f"{(cur[1]-prev[1]):+,.0f} wk/wk" if prev else "weekly")}
+    pay = fred_csv("PAYEMS", "2022-01-01")
+    if pay:
+        cur, prev = _latest_two(pay)
+        board["Nonfarm Payrolls (MoM)"] = {
+            "value": (f"{(cur[1]-prev[1])*1000:+,.0f}" if prev else f"{cur[1]*1000:,.0f}"),
+            "asof": cur[0], "sub": "jobs added, monthly"}
+    unrate = fred_csv("UNRATE", "2022-01-01")
+    if unrate:
+        cur, prev = _latest_two(unrate)
+        board["Unemployment Rate"] = {
+            "value": f"{cur[1]:.1f}%", "asof": cur[0],
+            "sub": (f"{(cur[1]-prev[1]):+.1f}pp" if prev else "monthly")}
+    jolts = fred_csv("JTSJOL", "2022-01-01")
+    if jolts:
+        cur, prev = _latest_two(jolts)
+        board["Job Openings (JOLTS)"] = {
+            "value": f"{cur[1]*1000:,.0f}", "asof": cur[0],
+            "sub": (f"{(cur[1]-prev[1])*1000:+,.0f} m/m" if prev else "monthly")}
+
+    # ---- Inflation (YoY from index) ----
+    for sid, lab in [("CPIAUCSL", "CPI (YoY)"), ("CPILFESL", "Core CPI (YoY)"),
+                     ("PPIFIS", "PPI Final Demand (YoY)"), ("PCEPI", "PCE (YoY)"),
+                     ("PCEPILFE", "Core PCE (YoY)")]:
+        s = fred_csv(sid, "2022-01-01")
+        y = _yoy(s)
+        if y is not None:
+            board[lab] = {"value": f"{y:.1f}%", "asof": s[-1][0], "sub": "year-over-year"}
+
+    return board
+
+@st.cache_data(ttl=3600)
+def fred_sentiment_board():
+    """Sentiment indicators with reliable free data: CNN Fear & Greed (live JSON),
+    University of Michigan sentiment (FRED), and OECD business/consumer confidence
+    (FRED) as widely-used proxies. AAII and Conference Board's official index are
+    not available via a reliable free feed and are intentionally omitted."""
+    board = {}
+    # CNN Fear & Greed (unofficial JSON)
+    try:
+        req = _urlreq.Request("https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+                              headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        with _urlreq.urlopen(req, timeout=15) as r:
+            js = json.loads(r.read())
+        fg = js.get("fear_and_greed", {})
+        score = fg.get("score"); rating = fg.get("rating")
+        if score is not None:
+            board["CNN Fear & Greed"] = {"value": f"{float(score):.0f}",
+                                         "sub": (rating or "").title(), "asof": fg.get("timestamp", "")[:10]}
+    except Exception:
+        pass
+    # Michigan consumer sentiment (FRED)
+    um = fred_csv("UMCSENT", "2022-01-01")
+    if um:
+        cur, prev = _latest_two(um)
+        board["U. Michigan Sentiment"] = {"value": f"{cur[1]:.1f}", "asof": cur[0],
+                                          "sub": (f"{(cur[1]-prev[1]):+.1f} m/m" if prev else "monthly")}
+    # OECD confidence proxies (FRED)
+    bc = fred_csv("BSCICP03USM665S", "2022-01-01")
+    if bc:
+        cur, prev = _latest_two(bc)
+        board["Business Confidence (OECD)"] = {"value": f"{cur[1]:.1f}", "asof": cur[0],
+                                               "sub": "OECD US, 100=avg"}
+    cc = fred_csv("CSCICP03USM665S", "2022-01-01")
+    if cc:
+        cur, prev = _latest_two(cc)
+        board["Consumer Confidence (OECD)"] = {"value": f"{cur[1]:.1f}", "asof": cur[0],
+                                               "sub": "OECD US, 100=avg"}
+    return board
+
+# ---- FRED-based Treasury yield curve (replaces the Treasury-endpoint version) ----
+FRED_CURVE = [("DGS1MO","1M"),("DGS3MO","3M"),("DGS6MO","6M"),("DGS1","1Y"),
+              ("DGS2","2Y"),("DGS3","3Y"),("DGS5","5Y"),("DGS7","7Y"),
+              ("DGS10","10Y"),("DGS20","20Y"),("DGS30","30Y")]
+
+@st.cache_data(ttl=3600)
+def fred_yield_curve():
+    """Build today's and ~1-month-prior par yield curves from FRED daily series.
+    Returns dict matching the old home_yield_curve() shape so the chart helper
+    is unchanged."""
+    latest = []; prior = []; latest_date = None; prior_date = None
+    series_cache = {}
+    for sid, lab in FRED_CURVE:
+        s = fred_csv(sid, "2024-01-01")
+        series_cache[lab] = s
+        if s:
+            latest.append((lab, s[-1][1]))
+            if latest_date is None or s[-1][0] > latest_date:
+                latest_date = s[-1][0]
+    # prior ≈ 21 business days back, per series
+    for sid, lab in FRED_CURVE:
+        s = series_cache.get(lab) or []
+        if len(s) > 22:
+            prior.append((lab, s[-22][1]))
+            prior_date = s[-22][0]
+    if not latest:
+        return {}
+    return {"date": latest_date, "latest": latest,
+            "prior": prior or None, "prior_date": prior_date}
+
+# ============================================================
+# IMPROVED NEWS: quality feeds + keyword bucketing + fluff filter
+# ============================================================
+# Higher-signal feeds. WSJ and Economist publish free RSS headline feeds; the
+# article click-through uses the reader's own login for paywalled outlets.
+HOME_QUALITY_FEEDS = [
+    ("https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "WSJ Markets"),
+    ("https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml", "WSJ Business"),
+    ("https://feeds.a.dj.com/rss/RSSWorldNews.xml", "WSJ World"),
+    ("https://feeds.a.dj.com/rss/RSSWSJD.xml", "WSJ Tech"),
+    ("https://www.economist.com/finance-and-economics/rss.xml", "Economist"),
+    ("https://www.economist.com/business/rss.xml", "Economist Business"),
+    ("https://www.cnbc.com/id/15839135/device/rss/rss.html", "CNBC Markets"),
+    ("https://www.cnbc.com/id/20910258/device/rss/rss.html", "CNBC Economy"),
+    ("https://apnews.com/index.rss", "AP"),
+]
+
+# Patterns that flag advertorial / personal-finance fluff — dropped entirely.
+NEWS_FLUFF = [
+    "i'm ", "i am ", "my husband", "my wife", "my son", "my daughter", "my mom", "my dad",
+    "should i", "how i ", "how to ", "dear ", "suze orman", "ask ", "long-term care",
+    "credit card", "best credit", "top 5", "top 10", "5 things", "3 things", "10 things",
+    "millionaire", "retire early", "401(k) mistake", "save money", "deal of", "discount",
+    "sponsored", "advertisement", "horoscope", "recipe", "gift guide", "prime day",
+    "mortgage rate", "personal loan", "savings account", "i bought", "i sold", "i tried",
+    "here's how much", "this is how", "could make you rich", "want to retire",
+]
+
+# Keyword sets per bucket. A headline must hit a bucket's keywords to appear there.
+NEWS_FACTOR_KW = {
+    "Fundamentals": ["earnings", "profit", "revenue", "guidance", "margin", "results",
+                     "sales", "outlook", "forecast", "beat estimates", "misses", "quarter", "eps"],
+    "Valuation": ["valuation", "p/e", "price target", "rating", "upgrade", "downgrade",
+                  "overvalued", "undervalued", "bubble", "expensive", "cheap", "multiple"],
+    "Interest Rates": ["fed", "rate", "yield", "treasury", "fomc", "powell", "monetary",
+                       "basis point", "rate cut", "rate hike", "central bank", "bond yield"],
+    "Policy": ["tariff", "trade war", "regulation", "fiscal", "tax", "congress", "white house",
+               "sanction", "antitrust", "legislation", "tradedeal", "trade deal", "stimulus"],
+    "Behavioral / Trends": ["rally", "selloff", "sell-off", "volatility", "fear", "greed",
+                            "momentum", "record high", "plunge", "surge", "rebound", "sentiment", "rout"],
+}
+NEWS_ASSET_KW = {
+    "US Equities": ["s&p", "nasdaq", "dow", "wall street", "u.s. stocks", "us stocks",
+                    "shares", "equities", "stock market"],
+    "International": ["china", "europe", "japan", "emerging market", "eurozone", "germany",
+                      "india", "uk ", "global stocks", "overseas", "eafe", "asia"],
+    "Fixed Income": ["bond", "treasury", "yield", "credit", "debt", "fixed income",
+                     "duration", "high-yield", "investment-grade", "coupon", "sovereign"],
+    "Commodities / Real Assets": ["oil", "crude", "gold", "copper", "commodity", "energy",
+                                  "metal", "natural gas", "silver", "wheat", "real estate", "reit"],
+}
+
+@st.cache_data(ttl=900)
+def home_news_pool():
+    """Fetch all quality feeds once, drop fluff, return [(title, source, link)]."""
+    items = []
+    for url, source in HOME_QUALITY_FEEDS:
+        try:
+            req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with _urlreq.urlopen(req, timeout=12) as r:
+                root = _ET.fromstring(r.read())
+            for it in root.iter():
+                tag = it.tag.lower()
+                if tag.endswith("item") or tag.endswith("entry"):
+                    title = link = None
+                    for ch in it:
+                        ct = ch.tag.lower()
+                        if ct.endswith("title") and title is None:
+                            title = (ch.text or "").strip()
+                        if ct.endswith("link") and link is None:
+                            link = (ch.text or "").strip() or ch.get("href")
+                    if title and len(title) > 12:
+                        low = title.lower()
+                        if not any(f in low for f in NEWS_FLUFF):
+                            items.append((title, source, link))
+        except Exception:
+            continue
+    seen = set(); uniq = []
+    for t, s, l in items:
+        k = t.lower()[:60]
+        if k not in seen:
+            seen.add(k); uniq.append((t, s, l))
+    return uniq
+
+def home_news_categorized(lens, per_bucket=4):
+    """Bucket the pooled headlines by keyword. Factors allow multi-bucket; Asset
+    Classes assign each headline to its single best-matching class. Returns
+    dict bucket -> [(title, source, link)]."""
+    pool = home_news_pool()
+    kw = NEWS_FACTOR_KW if lens == "Factors" else NEWS_ASSET_KW
+    out = {b: [] for b in kw}
+    if lens == "Factors":
+        for title, source, link in pool:
+            low = title.lower()
+            for b, words in kw.items():
+                if len(out[b]) >= per_bucket:
+                    continue
+                if any(w in low for w in words):
+                    out[b].append((title, source, link))
+    else:
+        for title, source, link in pool:
+            low = title.lower()
+            best, best_score = None, 0
+            for b, words in kw.items():
+                score = sum(1 for w in words if w in low)
+                if score > best_score:
+                    best, best_score = b, score
+            if best and len(out[best]) < per_bucket:
+                out[best].append((title, source, link))
+    return out
+
+
 # ========================================
 # HOME — Market Dashboard (landing page)
 # ========================================
@@ -2547,18 +2790,17 @@ if selected == "Home":
         last_txt = f"{q['last']:,.2f}"
         pct_txt = "" if pct is None else f" {arrow}{abs(pct):.2f}%"
         chips.append(
-            f"<span style='display:inline-block;padding:4px 12px;margin:2px;border-right:1px solid #2a2f3a;white-space:nowrap;'>"
-            f"<b style='color:#cbd5e1;font-size:.72rem'>{q['label']}</b> "
-            f"<span style='color:#e5e7eb;font-size:.72rem'>{last_txt}</span>"
-            f"<span style='color:{color};font-size:.7rem'>{pct_txt}</span></span>"
+            f"<span style='display:inline-block;padding:7px 18px;margin:2px;border-right:1px solid #2a2f3a;white-space:nowrap;'>"
+            f"<b style='color:#cbd5e1;font-size:.92rem'>{q['label']}</b> "
+            f"<span style='color:#e5e7eb;font-size:.92rem'>{last_txt}</span>"
+            f"<span style='color:{color};font-size:.88rem'>{pct_txt}</span></span>"
         )
     st.markdown(
         "<div style='background:#0e1117;border:1px solid #1f2530;border-radius:8px;"
-        "padding:4px 6px;overflow-x:auto;white-space:nowrap;margin-bottom:14px'>"
+        "padding:8px 8px;overflow-x:auto;white-space:nowrap;margin-bottom:16px'>"
         + "".join(chips) + "</div>", unsafe_allow_html=True)
 
     st.title("Market Dashboard")
-    st.caption(f"Real-time market context · {datetime.now(ZoneInfo('US/Eastern')).strftime('%A, %B %d, %Y · %I:%M %p ET')}")
 
     # ---- top row: macro snapshot strip ----
     snap = home_macro_snapshot()
@@ -2587,9 +2829,10 @@ if selected == "Home":
             buckets = ["Fundamentals", "Valuation", "Interest Rates", "Policy", "Behavioral / Trends"]
         else:
             buckets = ["US Equities", "International", "Fixed Income", "Commodities / Real Assets"]
+        cats = home_news_categorized(news_view, per_bucket=4)
         any_news = False
         for b in buckets:
-            items = home_news(b, limit=4)
+            items = cats.get(b, [])
             if not items:
                 continue
             any_news = True
@@ -2603,8 +2846,10 @@ if selected == "Home":
                                 unsafe_allow_html=True)
         if not any_news:
             st.info("Headlines are temporarily unavailable (news feeds unreachable). Market data above is unaffected.")
-        st.caption("Headlines from free public feeds (CNBC, AP, MarketWatch, Federal Reserve, US Treasury). "
-                   "Paywalled outlets (WSJ, FT, Barron's) are not available via free APIs.")
+        st.caption("Headlines from quality public RSS feeds (WSJ, The Economist, CNBC, AP), filtered to drop "
+                   "advertorial/personal-finance fluff and bucketed by topic via keyword match. WSJ/Economist links "
+                   "open in your browser, so your own logins handle the paywall. Asset-class items are assigned to their "
+                   "best-matching class, not just the source section.")
 
     with right:
         st.markdown("#### Rates & the Fed")
@@ -2622,7 +2867,7 @@ if selected == "Home":
             st.info("Fed-futures probabilities temporarily unavailable.")
 
         st.markdown("**Treasury Yield Curve**")
-        yc = home_yield_curve()
+        yc = fred_yield_curve()
         fig = home_yield_curve_figure(yc)
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True)
@@ -2648,6 +2893,30 @@ if selected == "Home":
 
 elif selected == "Trading Hub":
     st.header("Trading Hub - Multi-Ticker Analysis")
+
+    with st.expander("⚙️ Trading Settings", expanded=False):
+        _sc1, _sc2, _sc3 = st.columns(3)
+        with _sc1:
+            TRADING_MODE = st.radio("Mode", ["Paper Trading", "Live Trading"], key="th_mode")
+            MIN_CONVICTION = st.slider("Min Conviction", 1, 10, 5, key="th_minconv")
+            SIGNAL_EXPIRATION_MINUTES = st.slider("Signal Expiration (min)", 10, 120, DEFAULT_SIGNAL_EXPIRATION, key="th_sigexp")
+        with _sc2:
+            ENABLE_MACRO_FILTER = st.checkbox("Macro Signal Filter", value=True, key="th_macro")
+            USE_DYNAMIC_STOPS = st.checkbox("Dynamic Position Sizing", value=True, key="th_dyn")
+            STOP_LOSS_PCT = st.slider("Stop Loss %", -5.0, -0.5, -2.0, 0.5, key="th_stop")
+            TRAILING_STOP_PCT = st.slider("Trailing Stop %", 0.5, 3.0, 1.0, 0.5, key="th_trail")
+        with _sc3:
+            ENABLE_CONTINUATION_SIGNALS = st.checkbox("Continuation Signals", value=True, key="th_cont")
+            ENABLE_SUPPORT_RESISTANCE = st.checkbox("Support/Resistance", value=True, key="th_sr")
+            ENABLE_OPTIONS_SIGNALS = st.checkbox("Options Signals", value=True, key="th_opt")
+            ENABLE_TREND_FOLLOWING = st.checkbox("Trend Following", value=True, key="th_trend")
+            ENABLE_MEAN_REVERSION = st.checkbox("Mean Reversion", value=True, key="th_mr")
+        _dc1, _dc2 = st.columns(2)
+        with _dc1:
+            if st.button("💾 Force Save All Data", key="th_save"):
+                save_all_data(); st.success("✅ All data saved!")
+        with _dc2:
+            st.caption(f"Mode: {TRADING_MODE} · Last save: {st.session_state.last_save.strftime('%H:%M:%S')}")
     
     # Market Overview
     st.subheader("Market Overview")
@@ -2667,52 +2936,7 @@ elif selected == "Trading Hub":
     
     st.divider()
 
-    # ---- AI Portfolio Snapshot ----
-    with st.expander("🤖 AI Portfolio Snapshot", expanded=True):
-        snap_holdings = ai_load_portfolio()
-        with st.spinner("Loading AI portfolio..."):
-            s_strat, s_bench, s_per = ai_compute_performance(
-                snap_holdings, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK)
 
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("Holdings", f"{len(snap_holdings)}")
-        sc2.metric("Strategy / incept", f"{s_strat:+.1f}%" if s_strat is not None else "n/a")
-        s_delta = (s_strat - s_bench) if (s_strat is not None and s_bench is not None) else None
-        sc3.metric("NDX / incept", f"{s_bench:+.1f}%" if s_bench is not None else "n/a",
-                   f"{s_delta:+.1f}% active" if s_delta is not None else None)
-        # count names in each entry zone right now
-        zone_counts = {"🟢": 0, "🟡": 0, "🔴": 0, "—": 0}
-        for p in s_per:
-            z, _ = ai_entry_zone(p['ticker'], p.get('price_now'))
-            key = z.split()[0] if z and z[0] in "🟢🟡🔴" else "—"
-            zone_counts[key] = zone_counts.get(key, 0) + 1
-        sc4.metric("In buy zone", f"{zone_counts['🟢']} 🟢",
-                   help=f"🟢 at/below secondary · 🟡 below ceiling ({zone_counts['🟡']}) · 🔴 above ceiling ({zone_counts['🔴']})")
-
-        # compact per-holding table with today's move + entry zone
-        srows = []
-        for p in s_per:
-            tk = p['ticker']
-            pnow = p.get('price_now')
-            zone, tgt = ai_entry_zone(tk, pnow)
-            # today's move from 2-day history via the shared market fetch when available
-            srows.append({
-                "Tier": p['tier'], "Ticker": tk,
-                "Price": f"${pnow:,.2f}" if pnow is not None else "n/a",
-                "Since Incept": f"{p.get('ret_pct'):+.1f}%" if p.get('ret_pct') is not None else "n/a",
-                "Wt": f"{p.get('target_weight') or 0:.1f}%",
-                "Zone": zone,
-                "Optimal": f"${tgt['optimal']:,.2f}" if tgt else "—",
-                "Ceiling": f"${tgt['ceiling']:,.2f}" if tgt else "—",
-            })
-        tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
-        srows.sort(key=lambda r: (tier_order.get(r["Tier"], 9), r["Ticker"]))
-        st.dataframe(pd.DataFrame(srows), use_container_width=True, hide_index=True, height=340)
-        st.caption("Zone vs entry targets: 🟢 at/below secondary (buy) · 🟡 below do-not-exceed · 🔴 above ceiling. "
-                   "Full detail and the performance chart live on the AI Strategy tab.")
-
-    
-    # Market Status
     market_open = is_market_open()
     st.info(f"""
     **Market Status:** {'🟢 OPEN' if market_open else '🔴 CLOSED'}  
@@ -3029,7 +3253,7 @@ elif selected == "Market Dashboard":
             "Poland": "EPOL"
         },
         "Factors": {
-            "Value": "VLUE",
+            "Value": "JVAL",
             "Momentum": "MTUM",
             "Quality": "QUAL",
             "Size (Small Cap)": "SIZE",
@@ -3039,16 +3263,15 @@ elif selected == "Market Dashboard":
             "High Dividend": "HDV"
         },
         "International Factors": {
-            "Intl Value": "IVLU",
-            "Intl Growth": "EFG",
+            "EAFE Value": "EFV",
+            "EAFE Growth": "EFG",
+            "EAFE Quality": "IQLT",
             "Intl Momentum": "IMTM",
-            "Intl Quality": "IQLT",
             "Intl Low Volatility": "EFAV",
             "Intl Dividend": "IDV",
             "Intl High Dividend": "VYMI",
             "Intl Small Cap": "SCZ",
-            "Intl Multi-Factor": "INTF",
-            "EAFE Value (Broad)": "EFV"
+            "Intl Multi-Factor": "INTF"
         }
     }
     
@@ -3111,9 +3334,11 @@ elif selected == "Market Dashboard":
                                 # "Today" - last 2 trading days for day-over-day change
                                 period_hist = hist.tail(2)
                             else:
-                                # Use number of trading days
-                                # Add some buffer to ensure we get enough data
-                                period_hist = hist.tail(int(period_value * 1.2))
+                                # N-year window anchored to the latest close: start = anchor - N years.
+                                # period_value is trading days (252/yr); convert to calendar years.
+                                _years = period_value / 252.0
+                                _start = anchor - pd.Timedelta(days=int(round(_years * 365.25)))
+                                period_hist = hist[hist.index >= _start]
                             
                             if len(period_hist) >= 2:
                                 start_price = period_hist['Close'].iloc[0]
@@ -3798,7 +4023,14 @@ elif selected == "Chart Analysis":
     # precedence: typed > AI pick > default pick > SPY
     chosen = typed or (ai_pick if ai_pick != "—" else "") or (default_pick if default_pick != "—" else "") or "SPY"
 
-    period = st.radio("History", ["3mo", "6mo", "1y", "2y"], index=1, horizontal=True, key="chart_period")
+    period = st.radio("History", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "Custom"], index=2, horizontal=True, key="chart_period")
+    _cust_start = _cust_end = None
+    if period == "Custom":
+        _cc1, _cc2 = st.columns(2)
+        with _cc1:
+            _cust_start = st.date_input("Start", value=datetime.now() - timedelta(days=180), key="chart_cust_start")
+        with _cc2:
+            _cust_end = st.date_input("End", value=datetime.now(), key="chart_cust_end")
 
     valid, info = validate_ticker(chosen)
     if not valid:
@@ -3808,7 +4040,10 @@ elif selected == "Chart Analysis":
         st.markdown(f"### {chosen} — {nm}")
         try:
             t = yf.Ticker(chosen)
-            hist = t.history(period=period, interval="1d")
+            if period == "Custom" and _cust_start and _cust_end:
+                hist = t.history(start=_cust_start, end=_cust_end, interval="1d")
+            else:
+                hist = t.history(period=period, interval="1d")
 
             if not hist.empty:
                 df = calculate_technical_indicators(hist)
@@ -3908,7 +4143,15 @@ elif selected == "Options Chain":
     if chain_df is not None and not chain_df.empty:
         st.success(f"Loaded {len(chain_df)} contracts for {st.session_state.get('opt_chain_ticker', ticker_choice)}")
 
-        option_type = st.radio("Type", ["Calls", "Puts", "Both"], horizontal=True, key="opt_type_radio")
+        _ocf1, _ocf2, _ocf3 = st.columns(3)
+        with _ocf1:
+            option_type = st.radio("Type", ["Calls", "Puts", "Both"], horizontal=True, key="opt_type_radio")
+        with _ocf2:
+            _exps = ["All"] + sorted(chain_df['expiration'].dropna().unique().tolist())
+            _exp_pick = st.selectbox("Expiration", _exps, key="opt_exp_pick")
+        with _ocf3:
+            _money = st.radio("Moneyness", ["All", "ITM", "ATM", "OTM"], horizontal=True, key="opt_money",
+                              help="Relative to the current spot price. ATM = nearest ~6% band around spot.")
 
         if option_type == "Calls":
             filtered = chain_df[chain_df['type'] == 'Call']
@@ -3916,6 +4159,30 @@ elif selected == "Options Chain":
             filtered = chain_df[chain_df['type'] == 'Put']
         else:
             filtered = chain_df
+
+        if _exp_pick != "All":
+            filtered = filtered[filtered['expiration'] == _exp_pick]
+
+        # moneyness filter relative to live spot
+        if _money != "All":
+            try:
+                _spot = float(yf.Ticker(st.session_state.get('opt_chain_ticker', ticker_choice)).history(period="1d")['Close'].iloc[-1])
+            except Exception:
+                _spot = float(filtered['strike'].median()) if not filtered.empty else None
+            if _spot:
+                _band = _spot * 0.03
+                def _is_money(row):
+                    k = row['strike']; typ = row['type']
+                    if _money == "ATM":
+                        return abs(k - _spot) <= _band
+                    if _money == "ITM":
+                        return (k < _spot) if typ == 'Call' else (k > _spot)
+                    if _money == "OTM":
+                        return (k > _spot) if typ == 'Call' else (k < _spot)
+                    return True
+                if not filtered.empty:
+                    filtered = filtered[filtered.apply(_is_money, axis=1)]
+                st.caption(f"Spot ≈ ${_spot:,.2f} · ATM band ±${_band:,.2f}")
 
         display_cols = ['strike', 'type', 'dte', 'expiration', 'bid', 'ask', 'mid',
                         'lastPrice', 'impliedVolatility', 'volume', 'openInterest']
@@ -5036,8 +5303,37 @@ elif selected == "AI Strategy":
 
         # per-name headlines + optional Claude interpretation
         st.divider()
-        st.markdown("##### Headlines & Optional AI Read")
+        st.markdown("##### Headlines, Earnings & Research Links")
         pick = st.selectbox("Holding", [h['ticker'] for h in mon_holdings], key="em_pick")
+
+        # next earnings + deeper-dive links
+        _ei = em_earnings_info(pick)
+        _el1, _el2 = st.columns([1, 2])
+        with _el1:
+            if _ei.get("next"):
+                _du = _ei.get("days_until")
+                st.metric("Next earnings", _ei["next"], (f"in {_du}d" if _du is not None else None), delta_color="off")
+            elif _ei.get("last"):
+                st.metric("Last earnings", _ei["last"], delta_color="off")
+            else:
+                st.metric("Next earnings", "n/a")
+        with _el2:
+            _edgar = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={pick}&type=10-K&dateb=&owner=include&count=10"
+            _edgarq = f"https://efts.sec.gov/LATEST/search-index?q=%22{pick}%22"
+            _edgar_full = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={pick}&type=&dateb=&owner=include&count=20"
+            _yf_earn = f"https://finance.yahoo.com/quote/{pick}/analysis"
+            _yf_press = f"https://finance.yahoo.com/quote/{pick}/press-releases"
+            _ir_search = f"https://www.google.com/search?q={pick}+investor+relations"
+            st.markdown(
+                f"**Deeper dive:** "
+                f"[SEC filings (EDGAR)]({_edgar_full}) · "
+                f"[Latest 10-K/10-Q]({_edgar}) · "
+                f"[Yahoo estimates]({_yf_earn}) · "
+                f"[Press releases]({_yf_press}) · "
+                f"[Investor Relations ↗]({_ir_search})")
+            st.caption("EDGAR links go straight to the company's filings (10-K annual, 10-Q quarterly, 8-K for earnings). "
+                       "The IR link is a search since IR URLs aren't standardized.")
+
         heads = em_headlines(pick, n=6)
         if heads:
             for title, pub, url in heads:
@@ -5163,7 +5459,7 @@ elif selected == "Macro Dashboard":
     mc_left, mc_right = st.columns([1, 1])
     with mc_left:
         st.markdown("**Treasury Yield Curve**")
-        yc = home_yield_curve()
+        yc = fred_yield_curve()
         fig = home_yield_curve_figure(yc)
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True)
@@ -5193,6 +5489,49 @@ elif selected == "Macro Dashboard":
                         "[Treasury yield curve](https://www.ustreasuryyieldcurve.com/)")
         else:
             st.info("Fed-futures data temporarily unavailable.")
+
+    # ===== Economic Data (FRED) =====
+    st.divider()
+    st.subheader("Economic Data")
+    st.caption("Latest releases from FRED (Federal Reserve Bank of St. Louis). Inflation shown year-over-year; claims weekly; payrolls/JOLTS monthly.")
+    with st.spinner("Fetching FRED economic series..."):
+        eco = fred_macro_board()
+    if eco:
+        labor = ["Initial Jobless Claims", "Continuing Claims", "Nonfarm Payrolls (MoM)", "Unemployment Rate", "Job Openings (JOLTS)"]
+        infl = ["CPI (YoY)", "Core CPI (YoY)", "PPI Final Demand (YoY)", "PCE (YoY)", "Core PCE (YoY)"]
+        st.markdown("**Labor Market**")
+        lp = [k for k in labor if k in eco]
+        if lp:
+            lc = st.columns(len(lp))
+            for i, k in enumerate(lp):
+                lc[i].metric(k.replace(" (MoM)", ""), eco[k]["value"], eco[k]["sub"], delta_color="off",
+                             help=f"As of {eco[k]['asof']}")
+        st.markdown("**Inflation**")
+        ip = [k for k in infl if k in eco]
+        if ip:
+            ic = st.columns(len(ip))
+            for i, k in enumerate(ip):
+                ic[i].metric(k.replace(" (YoY)", ""), eco[k]["value"], eco[k]["sub"], delta_color="off",
+                             help=f"As of {eco[k]['asof']}")
+    else:
+        st.info("FRED economic data temporarily unavailable.")
+
+    # ===== Sentiment =====
+    st.divider()
+    st.subheader("Sentiment Indicators")
+    with st.spinner("Fetching sentiment..."):
+        senti = fred_sentiment_board()
+    if senti:
+        sk = list(senti.keys())
+        scol = st.columns(len(sk))
+        for i, k in enumerate(sk):
+            scol[i].metric(k, senti[k]["value"], senti[k].get("sub", ""), delta_color="off",
+                           help=f"As of {senti[k].get('asof','')}" if senti[k].get('asof') else None)
+        st.caption("CNN Fear & Greed is live (0=extreme fear, 100=extreme greed). Michigan sentiment from FRED. "
+                   "Business/Consumer Confidence are OECD US indices (100=long-run average) used as proxies. "
+                   "AAII and the Conference Board's official index are omitted — no reliable free feed.")
+    else:
+        st.info("Sentiment data temporarily unavailable.")
 
 st.divider()
 st.caption("DJR Trading System - Full Trading System with Persistent Storage")
