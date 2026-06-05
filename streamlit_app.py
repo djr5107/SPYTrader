@@ -1108,13 +1108,13 @@ AI_PORTFOLIO = [
     {"ticker": "AMZN", "name": "Amazon", "tier": "HYPER", "score": 6.8, "target_weight": 5.0, "conviction_date": "Q1 25", "thesis": "AWS $142B run rate, 19% growth. $200B 2026 AI capex. Custom Trainium/Inferentia gaining. $691B revenue. Post-earnings selloff on capex guidance. PEG 1.65 is fair. Benchmark weight; add on pullback below $190."},
     {"ticker": "MSFT", "name": "Microsoft", "tier": "HYPER", "score": 6.2, "target_weight": 5.0, "conviction_date": "Q1 25", "thesis": "$625B remaining obligations. Azure 31% growth (13pts AI). $305B rev, 34% ROE. Richest PEG (1.65) among hyperscalers. Cloud deceleration vs peers. Underweight vs NDX 8.1% until Copilot monetizes."},
     {"ticker": "ORCL", "name": "Oracle", "tier": "HYPER", "score": 7.0, "target_weight": 4.0, "conviction_date": "Q2 25", "thesis": "OCI revenue surging 50%+. $130B+ remaining obligations. NVDA partnership. EPS $5.45, growing 89% YoY. High debt (D/E ~6x) is primary concern. Execution risk on rapid global DC buildout."},
-    {"ticker": "BABA", "name": "Alibaba (ADR)", "tier": "HYPER", "score": 5.5, "target_weight": 3.0, "conviction_date": "Q2 25", "thesis": "Largest non-US hyperscaler. China's #1 cloud. $10B+ AI capex ramp. 12x fwd P/E, massive discount to US peers. Risk: China regulatory/geopolitical, VIE structure, US-China decoupling."},
     {"ticker": "NVDA", "name": "NVIDIA", "tier": "TIER 1", "score": 8.7, "target_weight": 8.0, "conviction_date": "Q1 25", "thesis": "85%+ GPU share for AI training. PEG 0.73. Blackwell demand exceeds supply into H2 2026. 73% gross margins, $45B net cash. CUDA lock-in. ER 2/25 is major catalyst. Risk: custom ASIC, China export controls, DeepSeek efficiency."},
     {"ticker": "AVGO", "name": "Broadcom", "tier": "TIER 1", "score": 8.0, "target_weight": 5.0, "conviction_date": "Q1 25", "thesis": "Leading custom ASIC designer (Google TPU, Meta MTIA). AI revenue tripled YoY. VMware adds recurring SW revenue. 2025 return +50.6%. Strong networking portfolio. Risk: customer concentration, premium valuation."},
     {"ticker": "TSM", "name": "TSMC (ADR)", "tier": "TIER 1", "score": 8.5, "target_weight": 4.0, "conviction_date": "Q1 25", "thesis": "Fabs every advanced AI chip (NVDA, AMD, AVGO). 60%+ gross margins on advanced nodes. Only true monopoly in AI supply chain. Arizona fab de-risks geopolitics. Risk: Taiwan/China (primary), cyclicality."},
     {"ticker": "AMD", "name": "AMD", "tier": "TIER 1", "score": 6.5, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "#2 GPU with MI300X gaining enterprise. Best PEG in semis (0.62). DC revenue +70% YoY. Xilinx for edge AI. Underperformed NVDA in 2025. Add on MI350 evidence. Risk: NVDA dominance."},
     {"ticker": "MU", "name": "Micron", "tier": "TIER 1", "score": 7.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "HBM3E critical bottleneck for AI training. 2026 HBM sold out. Memory pricing favorable. Cyclical history but AI creates structural shift. Risk: oversupply cycles, Samsung/SK competition."},
     {"ticker": "ANET", "name": "Arista Networks", "tier": "TIER 1", "score": 7.5, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "DC networking leader, 157% ROIC. 800G/1.6T for AI clusters. META/MSFT top customers. ER 2/12 will update outlook. Risk: customer concentration, Cisco competitive threat."},
+    {"ticker": "ARM", "name": "ARM Holdings", "tier": "TIER 1", "score": 7.0, "target_weight": 1.0, "conviction_date": "Q2 26", "thesis": "AI compute IP/royalty leverage; added 6/1 as a starter. High multiple (~95x) — re-derive entry on any print."},
     {"ticker": "DELL", "name": "Dell Technologies", "tier": "TIER 1", "score": 6.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Cheapest AI infra play at ~10x fwd P/E. $6B+ AI server pipeline. Enterprise refresh cycle. ER 2/26 critical. Risk: low-margin hardware, SMCI competition."},
     {"ticker": "MRVL", "name": "Marvell Tech", "tier": "TIER 1", "score": 7.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Custom ASIC + networking silicon. Revenue +45% from DC segment. Electro-optics for AI clusters. Higher growth potential than AVGO but more volatile. Risk: execution, customer concentration."},
     {"ticker": "VRT", "name": "Vertiv", "tier": "TIER 2", "score": 7.5, "target_weight": 4.0, "conviction_date": "Q1 25", "thesis": "Pure-play AI DC cooling/power. $9.5B+ backlog +30% QoQ. AI racks 3-10x more heat. 2025 return +42.8%. Expanding liquid cooling. Risk: conversion timing, Schneider/ABB competition."},
@@ -1124,7 +1124,7 @@ AI_PORTFOLIO = [
     {"ticker": "AMAT", "name": "Applied Materials", "tier": "TIER 2", "score": 6.0, "target_weight": 2.0, "conviction_date": "Q2 25", "thesis": "Semi equipment leader, tools for TSMC/Samsung/Intel. AI chip demand drives fab buildout. Picks-and-shovels play. Risk: cyclical spend, China export restrictions."},
     {"ticker": "TT", "name": "Trane Technologies", "tier": "TIER 2", "score": 6.0, "target_weight": 2.0, "conviction_date": "Q4 25", "thesis": "DC HVAC/cooling. 35% ROE, consistent compounder. AI cooling demand structural. More diversified than VRT. Risk: indirect AI exposure, premium valuation."},
     {"ticker": "CSCO", "name": "Cisco", "tier": "TIER 2", "score": 5.5, "target_weight": 2.0, "conviction_date": "Q1 25", "thesis": "Defensive. 2.8% yield. Splunk adds AI observability. Enterprise networking refresh. Lower beta ballast. Risk: slow innovation vs Arista, legacy decline."},
-    {"ticker": "HPE", "name": "HPE", "tier": "TIER 2", "score": 5.0, "target_weight": 2.0, "conviction_date": "Q1 25", "thesis": "Deep value at ~9x fwd P/E. AI server segment growing. Juniper acquisition adds networking. Risk: low margins, execution risk, losing AI server share to DELL."},
+    {"ticker": "PANW", "name": "Palo Alto Networks", "tier": "TIER 2", "score": 7.5, "target_weight": 2.5, "conviction_date": "Q2 26", "thesis": "Cybersecurity platform leader, AI-driven demand; added 6/1. Reports can re-rate levels — refresh after prints."},
     {"ticker": "VST", "name": "Vistra Corp", "tier": "TIER 3", "score": 7.5, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Largest competitive US power gen (nuclear+gas+solar). ~35% off ATH, entry opportunity. AI DCs consume 1-2 GW each. Nuclear renaissance thesis. Risk: regulation, nat gas exposure."},
     {"ticker": "CEG", "name": "Constellation Energy", "tier": "TIER 3", "score": 7.0, "target_weight": 3.0, "conviction_date": "Q1 25", "thesis": "Largest US nuclear fleet. TMI restart deal with MSFT (20-yr PPA). Clean energy premium. Nuclear capacity irreplaceable. Risk: TMI execution, regulatory timelines."},
     {"ticker": "GEV", "name": "GE Vernova", "tier": "TIER 3", "score": 6.5, "target_weight": 2.0, "conviction_date": "Q3 25", "thesis": "Gas turbine orders surging for DC baseload. Grid equipment (transformers) multi-year backlogs. Only near-term bridge for AI power. Risk: turbine execution, offshore wind losses."},
@@ -2502,6 +2502,95 @@ def home_news(bucket, limit=5):
 
 
 
+# ===== Two-date transactions (added v9) =====
+AI_INCEPTION_DATE = "2026-02-10"   # original book established
+# AI_REBALANCE_DATE ("2026-06-01") already defined earlier.
+
+# The ORIGINAL 2/10 book (before the 6/1 rebalance): includes BABA, HPE, full NEE;
+# excludes the 6/1 adds (PANW, ARM, SO). Names map to (name, tier, target_weight%).
+AI_PORTFOLIO_ORIGINAL = [
+    ("GOOGL", "Alphabet", "HYPER", 7.0), ("META", "Meta Platforms", "HYPER", 6.0),
+    ("AMZN", "Amazon", "HYPER", 5.0), ("MSFT", "Microsoft", "HYPER", 5.0),
+    ("ORCL", "Oracle", "HYPER", 4.0), ("BABA", "Alibaba", "HYPER", 3.0),
+    ("NVDA", "NVIDIA", "TIER 1", 8.0), ("AVGO", "Broadcom", "TIER 1", 5.0),
+    ("TSM", "TSMC", "TIER 1", 4.0), ("AMD", "AMD", "TIER 1", 3.0),
+    ("MU", "Micron", "TIER 1", 3.0), ("ANET", "Arista Networks", "TIER 1", 3.0),
+    ("DELL", "Dell Technologies", "TIER 1", 3.0), ("MRVL", "Marvell", "TIER 1", 3.0),
+    ("VRT", "Vertiv", "TIER 2", 4.0), ("ETN", "Eaton", "TIER 2", 3.0),
+    ("ASML", "ASML", "TIER 2", 2.0), ("APH", "Amphenol", "TIER 2", 2.0),
+    ("AMAT", "Applied Materials", "TIER 2", 2.0), ("TT", "Trane Technologies", "TIER 2", 2.0),
+    ("CSCO", "Cisco", "TIER 2", 2.0), ("HPE", "Hewlett Packard Enterprise", "TIER 2", 2.0),
+    ("VST", "Vistra", "TIER 3", 3.0), ("CEG", "Constellation Energy", "TIER 3", 3.0),
+    ("GEV", "GE Vernova", "TIER 3", 2.0), ("PWR", "Quanta Services", "TIER 3", 2.0),
+    ("CCJ", "Cameco", "TIER 3", 2.0), ("NEE", "NextEra Energy", "TIER 3", 2.0),
+    ("CAT", "Caterpillar", "TIER 3", 2.0), ("FSLR", "First Solar", "TIER 3", 2.0),
+]
+
+def ai_build_two_date_transactions(notional=AI_PORTFOLIO_NOTIONAL):
+    """Build the full transaction history:
+      1) 2/10 inception BUYs for the original 30 at 2/10 close prices.
+      2) 6/1 rebalance actions = diff between the original book and the current
+         book (ai_load_portfolio), priced at the 6/1 close.
+    Returns (inception_rows, rebalance_rows, summary)."""
+    orig = {tk: {"name": nm, "tier": ti, "w": w} for tk, nm, ti, w in AI_PORTFOLIO_ORIGINAL}
+    cur_holdings = ai_load_portfolio()
+    cur = {h["ticker"]: {"name": h.get("name", h["ticker"]), "tier": h.get("tier", ""),
+                         "w": (h.get("target_weight") or 0)} for h in cur_holdings if (h.get("target_weight") or 0) > 0}
+
+    # ---- 1) Inception buys (2/10) ----
+    px_inception = ai_prices_on_date(tuple(orig.keys()), AI_INCEPTION_DATE)
+    inception_rows = []
+    inv0 = 0.0
+    for tk, d in orig.items():
+        p = px_inception.get(tk)
+        dollars = notional * (d["w"] / 100.0)
+        shares = int(dollars // p) if (p and p > 0) else None
+        val = shares * p if (shares is not None and p) else None
+        if val:
+            inv0 += val
+        inception_rows.append({"date": AI_INCEPTION_DATE, "action": "BUY", "ticker": tk,
+                               "name": d["name"], "tier": d["tier"], "weight": d["w"],
+                               "price": p, "shares": shares, "value": val})
+
+    # ---- 2) 6/1 rebalance actions (diff orig -> current) ----
+    all_tk = sorted(set(orig) | set(cur))
+    reb_tk = [tk for tk in all_tk if abs(orig.get(tk, {}).get("w", 0) - cur.get(tk, {}).get("w", 0)) > 1e-9]
+    px_reb = ai_prices_on_date(tuple(reb_tk), AI_REBALANCE_DATE) if reb_tk else {}
+    rebalance_rows = []
+    for tk in all_tk:
+        ow = orig.get(tk, {}).get("w", 0.0)
+        cw = cur.get(tk, {}).get("w", 0.0)
+        if abs(ow - cw) < 1e-9:
+            continue
+        nm = (cur.get(tk) or orig.get(tk) or {}).get("name", tk)
+        ti = (cur.get(tk) or orig.get(tk) or {}).get("tier", "")
+        if ow == 0:
+            action = "BUY (new)"
+        elif cw == 0:
+            action = "SELL (exit)"
+        elif cw < ow:
+            action = "TRIM"
+        else:
+            action = "ADD"
+        p = px_reb.get(tk)
+        dShares = None; dVal = None
+        if p and p > 0:
+            # approximate share change from the weight delta on the notional
+            dShares = int(round((cw - ow) / 100.0 * notional / p))
+            dVal = dShares * p
+        rebalance_rows.append({"date": AI_REBALANCE_DATE, "action": action, "ticker": tk,
+                               "name": nm, "tier": ti, "from_w": ow, "to_w": cw,
+                               "price": p, "shares": dShares, "value": dVal})
+
+    summary = {"inception_invested": inv0, "notional": notional,
+               "n_inception": len([r for r in inception_rows if r["shares"]]),
+               "n_sell": len([r for r in rebalance_rows if r["action"].startswith("SELL")]),
+               "n_trim": len([r for r in rebalance_rows if r["action"] == "TRIM"]),
+               "n_buy": len([r for r in rebalance_rows if r["action"].startswith("BUY")]),
+               "n_add": len([r for r in rebalance_rows if r["action"] == "ADD"])}
+    return inception_rows, rebalance_rows, summary
+
+
 # ===== FRED, sentiment, improved news (added v8) =====
 @st.cache_data(ttl=3600)
 def fred_csv(series_id, start="2018-01-01"):
@@ -2773,6 +2862,44 @@ def home_news_categorized(lens, per_bucket=4):
     return out
 
 
+# ===== Home market snapshot chart (added v9) =====
+@st.cache_data(ttl=600)
+def home_market_chart(symbol="SPY", period="6mo"):
+    """Snapshot market chart data: closes + a 50-day moving average. Returns
+    (dates, closes, ma50, last, chg_pct) or None. Less dynamic than Chart Analysis."""
+    try:
+        h = yf.Ticker(symbol).history(period=period, interval="1d")
+        if h.empty or len(h) < 5:
+            return None
+        closes = h["Close"]
+        ma50 = closes.rolling(50).mean()
+        last = float(closes.iloc[-1])
+        first = float(closes.iloc[0])
+        chg = (last / first - 1) * 100 if first else None
+        return {"dates": list(h.index), "closes": [float(x) for x in closes],
+                "ma50": [None if pd.isna(x) else float(x) for x in ma50],
+                "last": last, "chg_pct": chg, "symbol": symbol, "period": period}
+    except Exception:
+        return None
+
+def home_market_chart_figure(mc):
+    if not mc:
+        return None
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=mc["dates"], y=mc["closes"], mode="lines", name=mc["symbol"],
+                             line=dict(color="#2dd4bf", width=2)))
+    if any(v is not None for v in mc["ma50"]):
+        fig.add_trace(go.Scatter(x=mc["dates"], y=mc["ma50"], mode="lines", name="50-day MA",
+                                 line=dict(color="#94a3b8", width=1, dash="dot")))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="#c9d4e0"), showlegend=True,
+                      legend=dict(orientation="h", y=1.08, x=0), hovermode="x unified")
+    fig.update_yaxes(gridcolor="rgba(120,130,140,0.12)")
+    fig.update_xaxes(gridcolor="rgba(120,130,140,0.12)")
+    return fig
+
+
 # ========================================
 # HOME — Market Dashboard (landing page)
 # ========================================
@@ -2802,23 +2929,7 @@ if selected == "Home":
 
     st.title("Market Dashboard")
 
-    # ---- top row: macro snapshot strip ----
-    snap = home_macro_snapshot()
-    if snap:
-        order = ["10Y", "2Y", "30Y", "VIX", "DXY", "WTI", "Gold", "Copper"]
-        present = [k for k in order if k in snap] or list(snap.keys())
-        scols = st.columns(len(present))
-        for i, k in enumerate(present):
-            v = snap[k]["value"]; ch = snap[k].get("change")
-            is_rate = k in ("10Y", "2Y", "30Y", "13W TBill")
-            val_txt = f"{v:.2f}%" if is_rate else f"{v:,.2f}"
-            delta_txt = None
-            if ch is not None:
-                delta_txt = (f"{ch:+.02f}" + ("pp" if is_rate else ""))
-            scols[i].metric(k, val_txt, delta_txt, delta_color="inverse" if k == "VIX" else "normal")
-    st.divider()
-
-    # ---- main grid: news (left, wide) + rates/curve (right) ----
+    # ---- main grid: news (left, wide) + market chart / rates (right) ----
     left, right = st.columns([1.35, 1])
 
     with left:
@@ -2852,6 +2963,21 @@ if selected == "Home":
                    "best-matching class, not just the source section.")
 
     with right:
+        st.markdown("#### Market Snapshot")
+        _mc_sym = st.radio("Index", ["SPY", "QQQ", "DIA", "IWM"], horizontal=True, key="home_mkt_sym",
+                           label_visibility="collapsed")
+        _mc = home_market_chart(_mc_sym, "6mo")
+        if _mc:
+            _mcc1, _mcc2 = st.columns([2, 1])
+            _mcc1.metric(f"{_mc_sym}", f"${_mc['last']:,.2f}",
+                         f"{_mc['chg_pct']:+.1f}% (6mo)" if _mc['chg_pct'] is not None else None)
+            mfig = home_market_chart_figure(_mc)
+            if mfig is not None:
+                st.plotly_chart(mfig, use_container_width=True)
+        else:
+            st.info("Market chart temporarily unavailable.")
+        st.divider()
+
         st.markdown("#### Rates & the Fed")
         # Fed probabilities (derived)
         fed = home_fed_probabilities()
@@ -3143,7 +3269,6 @@ elif selected == "Market Dashboard":
     if _ltd:
         _ltd_label = _ltd.strftime("%a, %b %d, %Y")
         _today_col_label = _ltd.strftime("%b %d")
-        st.info(f"📅 **Today** references the last completed trading day: **{_ltd_label}**. MTD and YTD are measured from this date.")
     else:
         _ltd_label = "unavailable"
         _today_col_label = "Today"
@@ -5365,50 +5490,68 @@ elif selected == "AI Strategy":
 
     # ---------------- TRANSACTIONS ----------------
     with ai_tabs[8]:
-        st.subheader("Transactions — Rebalance")
-        st.caption(f"The rebalance, modeled as establishing every target position at the {AI_REBALANCE_DATE} market close on a ${AI_PORTFOLIO_NOTIONAL:,.0f} book. Whole shares, no fractional.")
+        st.subheader("Transactions")
+        st.caption(f"Initial book established {AI_INCEPTION_DATE} (30 names); rebalanced {AI_REBALANCE_DATE}. "
+                   f"Modeled on a ${AI_PORTFOLIO_NOTIONAL:,.0f} book at each date's close, whole shares.")
 
-        txn_holdings = ai_load_portfolio()
-        with st.spinner(f"Fetching {AI_REBALANCE_DATE} close prices..."):
-            txn_rows, txn_tot = ai_build_transactions(txn_holdings, AI_REBALANCE_DATE, AI_PORTFOLIO_NOTIONAL)
-
-        tc1, tc2, tc3, tc4 = st.columns(4)
-        tc1.metric("Trade Date", AI_REBALANCE_DATE)
-        tc2.metric("Positions", f"{sum(1 for r in txn_rows if r['shares'])}")
-        tc3.metric("Invested", f"${txn_tot['invested']:,.0f}", f"{txn_tot['invested']/txn_tot['notional']*100:.1f}% of book")
-        tc4.metric("Residual Cash", f"${txn_tot['cash']:,.0f}", f"{txn_tot['cash']/txn_tot['notional']*100:.1f}%", delta_color="off")
+        with st.spinner("Fetching 2/10 and 6/1 close prices..."):
+            inc_rows, reb_rows, summ = ai_build_two_date_transactions(AI_PORTFOLIO_NOTIONAL)
 
         tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
-        disp = []
-        for r in sorted(txn_rows, key=lambda x: (tier_order.get(x['tier'], 9), -(x['weight'] or 0))):
-            disp.append({
-                "Date": AI_REBALANCE_DATE, "Action": "BUY", "Ticker": r['ticker'], "Name": r['name'],
-                "Tier": r['tier'], "Target Wt": f"{r['weight']:.1f}%",
-                "Fill Price": f"${r['price']:,.2f}" if r['price'] else "n/a",
-                "Shares": f"{r['shares']:,}" if r['shares'] is not None else "n/a",
-                "Value": f"${r['value']:,.0f}" if r['value'] is not None else "n/a",
-                "% of Book": f"{(r['value']/txn_tot['notional']*100):.1f}%" if r['value'] is not None else "n/a",
-            })
-        st.dataframe(pd.DataFrame(disp), use_container_width=True, hide_index=True, height=560)
 
-        # downloadable trade blotter
-        blotter = pd.DataFrame([{
-            "trade_date": AI_REBALANCE_DATE, "action": "BUY", "ticker": r['ticker'],
-            "tier": r['tier'], "target_weight_pct": r['weight'], "fill_price": r['price'],
-            "shares": r['shares'], "trade_value": r['value']
-        } for r in txn_rows])
-        st.download_button("⬇️ Download trade blotter (CSV)", blotter.to_csv(index=False),
-                           f"ai_rebalance_blotter_{AI_REBALANCE_DATE}.csv", "text/csv")
+        # ===== Section 1: inception buys =====
+        st.markdown(f"##### Initial Buys — {AI_INCEPTION_DATE}")
+        ic1, ic2, ic3 = st.columns(3)
+        ic1.metric("Names bought", f"{summ['n_inception']}")
+        ic2.metric("Invested", f"${summ['inception_invested']:,.0f}",
+                   f"{summ['inception_invested']/summ['notional']*100:.1f}% of book")
+        ic3.metric("Residual cash", f"${summ['notional']-summ['inception_invested']:,.0f}", delta_color="off")
+        inc_disp = []
+        for r in sorted(inc_rows, key=lambda x: (tier_order.get(x['tier'], 9), -(x['weight'] or 0))):
+            inc_disp.append({"Date": r['date'], "Action": r['action'], "Ticker": r['ticker'],
+                             "Name": r['name'], "Tier": r['tier'], "Target Wt": f"{r['weight']:.1f}%",
+                             "Fill Price": f"${r['price']:,.2f}" if r['price'] else "n/a",
+                             "Shares": f"{r['shares']:,}" if r['shares'] is not None else "n/a",
+                             "Value": f"${r['value']:,.0f}" if r['value'] is not None else "n/a"})
+        st.dataframe(pd.DataFrame(inc_disp), use_container_width=True, hide_index=True, height=420)
 
-        st.caption("This models the rebalance as a fresh establishment of the target book at the "
-                   f"{AI_REBALANCE_DATE} close, consistent with funding the strategy from a VOO rotation. "
-                   "It does not separately show sells of any prior positions; if you want the from/to deltas "
-                   "against an existing book, add your current share counts and I can net them.")
+        # ===== Section 2: 6/1 rebalance =====
+        st.divider()
+        st.markdown(f"##### Rebalance Actions — {AI_REBALANCE_DATE}")
+        rc1, rc2, rc3, rc4 = st.columns(4)
+        rc1.metric("Sells", f"{summ['n_sell']}")
+        rc2.metric("Trims", f"{summ['n_trim']}")
+        rc3.metric("New buys", f"{summ['n_buy']}")
+        rc4.metric("Adds", f"{summ['n_add']}")
+        if reb_rows:
+            action_order = {"SELL (exit)": 0, "TRIM": 1, "ADD": 2, "BUY (new)": 3}
+            reb_disp = []
+            for r in sorted(reb_rows, key=lambda x: (action_order.get(x['action'], 9), x['ticker'])):
+                reb_disp.append({"Date": r['date'], "Action": r['action'], "Ticker": r['ticker'],
+                                 "Name": r['name'], "Tier": r['tier'],
+                                 "From": f"{r['from_w']:.1f}%", "To": f"{r['to_w']:.1f}%",
+                                 "Fill Price": f"${r['price']:,.2f}" if r['price'] else "n/a",
+                                 "Δ Shares": (f"{r['shares']:+,}" if r['shares'] is not None else "n/a"),
+                                 "Δ Value": (f"${r['value']:+,.0f}" if r['value'] is not None else "n/a")})
+            st.dataframe(pd.DataFrame(reb_disp), use_container_width=True, hide_index=True, height=320)
+            st.caption("SELL = full exit, TRIM = reduce, ADD = increase, BUY (new) = new position. "
+                       "Δ Shares/Value approximate the change from the weight delta on the $100k book at the 6/1 close. "
+                       "BABA and HPE exited; NEE trimmed on the Dominion-deal affordability risk; PANW, ARM, SO added.")
+        else:
+            st.info("No rebalance changes detected between the original book and the current holdings.")
 
-
-# ========================================
-# MACRO DASHBOARD
-# ========================================
+        # combined downloadable blotter
+        blot = []
+        for r in inc_rows:
+            blot.append({"date": r['date'], "action": r['action'], "ticker": r['ticker'],
+                         "tier": r['tier'], "target_weight": r['weight'], "fill_price": r['price'],
+                         "shares": r['shares'], "value": r['value']})
+        for r in reb_rows:
+            blot.append({"date": r['date'], "action": r['action'], "ticker": r['ticker'],
+                         "tier": r['tier'], "from_weight": r['from_w'], "to_weight": r['to_w'],
+                         "fill_price": r['price'], "share_delta": r['shares'], "value_delta": r['value']})
+        st.download_button("⬇️ Download full transaction blotter (CSV)", pd.DataFrame(blot).to_csv(index=False),
+                           "ai_transactions_full.csv", "text/csv")
 
 elif selected == "Macro Dashboard":
     st.header("📊 Macro Economic Indicators")
