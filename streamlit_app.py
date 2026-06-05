@@ -2368,8 +2368,16 @@ One or two sentences: do the results confirm, challenge, or are neutral to the p
 **CONVICTION: RAISE / MAINTAIN / LOWER**
 One sentence verdict with the word RAISE, MAINTAIN, or LOWER. Then one sentence on the single biggest risk to watch.
 """
+    import urllib.request as _ur, json as _js, urllib.error as _ue
+    # Strip whitespace (common mobile-paste issue) and validate format.
+    key = api_key.strip()
+    if not key.startswith("sk-ant-"):
+        return data, (
+            "⚠️ Key format looks wrong — Anthropic keys start with `sk-ant-`. "
+            f"Got {len(key)} chars starting with `{key[:8]}...`. "
+            "Copy the full key from console.anthropic.com → API Keys."
+        )
     try:
-        import urllib.request as _ur, json as _js
         body = _js.dumps({
             "model": model,
             "max_tokens": 600,
@@ -2377,14 +2385,34 @@ One sentence verdict with the word RAISE, MAINTAIN, or LOWER. Then one sentence 
         }).encode()
         req = _ur.Request(
             "https://api.anthropic.com/v1/messages", data=body,
-            headers={"Content-Type": "application/json", "x-api-key": api_key,
+            headers={"Content-Type": "application/json", "x-api-key": key,
                      "anthropic-version": "2023-06-01"})
         with _ur.urlopen(req, timeout=45) as r:
             resp = _js.loads(r.read())
         text = "".join(p.get("text", "") for p in resp.get("content", []) if p.get("type") == "text")
         return data, text or "No response."
+    except _ue.HTTPError as e:
+        code = e.code
+        if code == 401:
+            return data, (
+                "❌ **401 Unauthorized** — the API key was rejected. Most likely causes:\n"
+                "- The key is truncated (mobile paste often cuts it off). "
+                f"Your key is {len(key)} chars; Anthropic keys are ~108 chars.\n"
+                "- The key has been revoked or expired.\n"
+                "- Billing isn't set up on this key.\n\n"
+                "Check at [console.anthropic.com → API Keys](https://console.anthropic.com/settings/keys)."
+            )
+        if code == 429:
+            return data, "❌ **429 Rate limited** — you've hit your API rate limit. Wait a moment and try again."
+        if code == 400:
+            try:
+                detail = _js.loads(e.read()).get("error", {}).get("message", "")
+            except Exception:
+                detail = ""
+            return data, f"❌ **400 Bad request**: {detail or e.reason}"
+        return data, f"❌ **HTTP {code}**: {e.reason}"
     except Exception as e:
-        return data, f"Claude call failed: {e}"
+        return data, f"❌ Unexpected error: {e}"
 # ===== Transactions / batting average / attribution helpers (added) =====
 AI_REBALANCE_DATE = "2026-06-01"   # rebalance executed at this session's close
 AI_PORTFOLIO_NOTIONAL = 100000.0   # $100k example book for share counts
@@ -5939,16 +5967,25 @@ elif selected == "AI Strategy":
             )
             _col_key, _col_model = st.columns([3, 1])
             with _col_key:
-                user_key = st.text_input("Anthropic API key (sk-ant-...)", type="password", key="em_api_key")
+                user_key = st.text_input("Anthropic API key (sk-ant-...)", type="password", key="em_api_key",
+                                         help="Your key from console.anthropic.com. Never stored server-side.")
+                if user_key:
+                    _k = user_key.strip()
+                    _ok = _k.startswith("sk-ant-") and len(_k) >= 90
+                    st.caption(
+                        f"{'✅' if _ok else '⚠️'} {len(_k)} chars pasted — "
+                        + ("looks complete." if _ok else
+                           "key looks short or wrong format. Anthropic keys are ~108 chars starting with `sk-ant-`.")
+                    )
             with _col_model:
                 _model_choice = st.selectbox("Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
                                              key="em_model", help="Haiku = faster/cheaper; Sonnet = deeper analysis")
             if st.button(f"📊 Analyse {pick} earnings", key="em_analyse_btn", use_container_width=True):
-                if not user_key:
+                if not user_key or not user_key.strip():
                     st.warning("Paste your API key above to run the analysis.")
                 else:
                     with st.spinner(f"Gathering {pick} data and running analysis..."):
-                        edata, analysis_text = em_earnings_analysis(user_key, pick, model=_model_choice)
+                        edata, analysis_text = em_earnings_analysis(user_key.strip(), pick, model=_model_choice)
                     if edata:
                         # show the data package that was sent to Claude
                         with st.expander("📋 Data used in analysis", expanded=False):
