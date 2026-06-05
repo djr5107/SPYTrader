@@ -2665,11 +2665,23 @@ def home_curve_spreads(yc):
         out["3m10y"] = round((d["10Y"] - d["3M"]) * 100)
     return out
 
-# ---- Derived Fed rate-move probabilities from Fed Funds futures ----
-# ---------- Meeting-weighted Fed probabilities (CME FedWatch methodology) ----------
-# 2026 FOMC decision dates (second day of each meeting). Update annually.
+# ──────────────────────────────────────────────────────────────────────────────
+# FED WATCH — meeting-date-weighted (CME methodology) — FIXED v12
+# ──────────────────────────────────────────────────────────────────────────────
+# 2026 FOMC decision dates (decision day = second day of each meeting).
 FOMC_2026 = ["2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
              "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-16"]
+
+# Current Fed Funds target midpoint.  This CANNOT be reliably inferred from the
+# meeting-month ZQ contract because that contract already blends both pre- and
+# post-meeting rates (circular dependency). Instead we hardcode it and expose a
+# UI control so you can update it whenever the Fed moves.
+# Update this line when the Fed changes the target. Unit: % (e.g. 3.625 = 350-375 range midpoint).
+FED_CURRENT_MID_DEFAULT = 3.625   # 350-375 bps range as of June 2026
+
+def _fed_current_mid():
+    """Return the current Fed Funds target midpoint: session override first, else default."""
+    return float(st.session_state.get("fed_current_mid", FED_CURRENT_MID_DEFAULT))
 
 def _next_fomc(today=None):
     today = today or datetime.now(ZoneInfo("America/New_York")).date()
@@ -2679,20 +2691,19 @@ def _next_fomc(today=None):
             return dd
     return None
 
-@st.cache_data(ttl=3600)
-def home_fed_probabilities():
-    """Probabilities for the NEXT FOMC meeting using the CME FedWatch methodology:
-    a 30-day Fed Funds future settles to the month's average daily effective rate,
-    so the meeting-month contract blends the pre- and post-meeting rate by the
-    number of days each is in effect. We solve that blend for the implied
-    post-meeting rate, compare to the current target midpoint, and convert the
-    expected change into probabilities across the nearest 25 bps increments.
+@st.cache_data(ttl=900)
+def home_fed_probabilities(current_mid=None):
+    """CME FedWatch methodology: the meeting-month ZQ futures contract settles
+    to the month's average daily EFFR. We solve for the implied post-meeting rate
+    by weighting pre- and post-meeting days, then convert the expected move vs
+    the current target midpoint into probabilities.
 
-    This is the same math CME publishes; it is computed here from the futures
-    curve (CME exposes no free API). The current target midpoint is inferred from
-    the front contract when no meeting falls earlier in the current month."""
+    Key fix v12: current_mid is passed explicitly (not inferred from the futures
+    price, which is circular when the meeting is in the current month)."""
     try:
         import calendar as _cal
+        if current_mid is None:
+            current_mid = _fed_current_mid()
         meeting = _next_fomc()
         if meeting is None:
             return {}
@@ -2701,54 +2712,54 @@ def home_fed_probabilities():
         if h.empty:
             return {}
         front_price = float(h["Close"].iloc[-1])
-        front_implied = 100.0 - front_price  # avg effective rate implied for the front month
+        front_implied = 100.0 - front_price
 
-        # Infer current target midpoint: round the front implied to the nearest 25 bps.
-        cur_mid = round(front_implied * 4) / 4
-
-        # Intra-month weighting for the meeting month.
+        # Intra-month day weighting (standard CME approach):
+        # Days at OLD rate = meeting_day - 1 (days 1 to meeting_day-1)
+        # Days at NEW rate = N - (meeting_day - 1)  (meeting_day through end of month)
         N = _cal.monthrange(meeting.year, meeting.month)[1]
-        d_eff = meeting.day + 1          # new rate effective the day after the decision
-        days_old = max(0, d_eff - 1)
+        days_old = max(0, meeting.day - 1)
         days_new = max(1, N - days_old)
 
-        # If the next meeting is in the current (front) month, solve the front
-        # contract's monthly average for the post-meeting rate.
         today = datetime.now(ZoneInfo("America/New_York")).date()
         if meeting.month == today.month and meeting.year == today.year:
-            month_avg = front_implied
-            post_rate = (month_avg * N - days_old * cur_mid) / days_new
+            # Meeting is this month: front contract IS the meeting-month contract.
+            # Solve: front_implied = (days_old * current_mid + days_new * post) / N
+            post_rate = (front_implied * N - days_old * current_mid) / days_new
         else:
-            # Meeting is in a later month: the front contract reflects the current
-            # rate; use the implied forward as the post-meeting estimate.
+            # Meeting is in a future month. The front contract reflects the current
+            # effective rate (no upcoming meeting this month to blend). Use it
+            # directly as the post-meeting implied (good approximation for near-term).
             post_rate = front_implied
 
-        move = (post_rate - cur_mid) * 100.0  # bps, signed (negative = cut)
+        move = (post_rate - current_mid) * 100.0   # bps; negative = cut
 
-        # Convert expected move into probabilities across 25 bps increments.
-        step = 25.0
-        steps = move / step  # e.g. -0.6 => 60% of a 25bp cut priced
-        probs = {"cut25": 0.0, "hold": 0.0, "hike25": 0.0, "cut50": 0.0, "hike50": 0.0}
-        if steps <= -1:
-            # between a 25 and 50 bps cut
-            frac = min(1.0, -steps - 1.0)
-            probs["cut50"] = round(frac * 100)
-            probs["cut25"] = round((1 - frac) * 100)
+        # Probabilities across ±25 and ±50 bps increments.
+        # steps = expected move / 25bp. e.g. -0.8 = market pricing 80% of a 25bp cut.
+        # Threshold at ±0.5 steps: below -0.5 is a blend of cut25+cut50; above +0.5 hike25+hike50.
+        steps = move / 25.0
+        probs = {"cut50": 0, "cut25": 0, "hold": 0, "hike25": 0, "hike50": 0}
+        if steps <= -1.5:
+            probs["cut50"] = 100
+        elif steps <= -0.5:
+            frac = (-steps - 0.5) / 1.0          # fraction between 25 and 50bp cut
+            probs["cut50"] = round(frac * 100); probs["cut25"] = 100 - probs["cut50"]
         elif steps < 0:
-            probs["cut25"] = round(-steps * 100)
-            probs["hold"] = round((1 + steps) * 100)
+            probs["cut25"] = round(-steps * 100)  # e.g. -0.033 → 3%; -0.8 → 80%
+            probs["hold"] = 100 - probs["cut25"]
         elif steps == 0:
             probs["hold"] = 100
-        elif steps < 1:
-            probs["hike25"] = round(steps * 100)
-            probs["hold"] = round((1 - steps) * 100)
+        elif steps < 0.5:
+            probs["hike25"] = round(steps * 100)  # e.g. 0.4 → 40%
+            probs["hold"] = 100 - probs["hike25"]
+        elif steps < 1.5:
+            frac = (steps - 0.5) / 1.0
+            probs["hike50"] = round(frac * 100); probs["hike25"] = 100 - probs["hike50"]
         else:
-            frac = min(1.0, steps - 1.0)
-            probs["hike50"] = round(frac * 100)
-            probs["hike25"] = round((1 - frac) * 100)
+            probs["hike50"] = 100
 
         return {"meeting": meeting.strftime("%b %d, %Y"),
-                "implied_rate": round(post_rate, 3), "target_mid": round(cur_mid, 3),
+                "implied_rate": round(post_rate, 3), "target_mid": round(current_mid, 3),
                 "move_bps": round(move, 1), "front_price": round(front_price, 4),
                 "p_cut": probs["cut25"], "p_hold": probs["hold"], "p_hike": probs["hike25"],
                 "p_cut50": probs["cut50"], "p_hike50": probs["hike50"]}
@@ -3116,14 +3127,25 @@ def fred_yield_curve():
 # Higher-signal feeds. WSJ and Economist publish free RSS headline feeds; the
 # article click-through uses the reader's own login for paywalled outlets.
 HOME_QUALITY_FEEDS = [
+    # WSJ (free RSS headlines; full article via your login)
     ("https://feeds.a.dj.com/rss/RSSMarketsMain.xml", "WSJ Markets"),
     ("https://feeds.a.dj.com/rss/WSJcomUSBusiness.xml", "WSJ Business"),
     ("https://feeds.a.dj.com/rss/RSSWorldNews.xml", "WSJ World"),
     ("https://feeds.a.dj.com/rss/RSSWSJD.xml", "WSJ Tech"),
+    # Reuters (high signal-to-noise, real-time business/markets coverage)
+    ("https://feeds.reuters.com/reuters/businessNews", "Reuters Business"),
+    ("https://feeds.reuters.com/reuters/technologyNews", "Reuters Tech"),
+    ("https://feeds.reuters.com/reuters/topNews", "Reuters Top"),
+    # Yahoo Finance
+    ("https://finance.yahoo.com/news/rssindex", "Yahoo Finance"),
+    ("https://finance.yahoo.com/rss/topfinstories", "Yahoo Finance"),
+    # The Economist
     ("https://www.economist.com/finance-and-economics/rss.xml", "Economist"),
     ("https://www.economist.com/business/rss.xml", "Economist Business"),
+    # CNBC
     ("https://www.cnbc.com/id/15839135/device/rss/rss.html", "CNBC Markets"),
     ("https://www.cnbc.com/id/20910258/device/rss/rss.html", "CNBC Economy"),
+    # AP
     ("https://apnews.com/index.rss", "AP"),
 ]
 
@@ -3136,6 +3158,8 @@ NEWS_FLUFF = [
     "sponsored", "advertisement", "horoscope", "recipe", "gift guide", "prime day",
     "mortgage rate", "personal loan", "savings account", "i bought", "i sold", "i tried",
     "here's how much", "this is how", "could make you rich", "want to retire",
+    "crypto portfolio", "how to build a", "best way to", "ad ·", "citi®", "discover®",
+    "trillionaire", "celebrity", "elon musk poised",
 ]
 
 # Keyword sets per bucket. A headline must hit a bucket's keywords to appear there.
@@ -3445,20 +3469,29 @@ if selected == "Home":
         st.divider()
 
         st.markdown("#### Rates & the Fed")
-        # Fed probabilities (CME FedWatch methodology, computed from futures)
-        fed = home_fed_probabilities()
+        # FedWatch — CME methodology. Current rate editable since it can't be inferred.
+        _fed_mid_input = st.number_input(
+            "Current Fed Funds target midpoint (%)", min_value=0.0, max_value=10.0,
+            value=float(st.session_state.get("fed_current_mid", FED_CURRENT_MID_DEFAULT)),
+            step=0.25, format="%.3f", key="fed_mid_home",
+            help=f"Midpoint of the current target range (e.g. 3.625 = 350-375 bps). "
+                 f"Update when the Fed moves. Default: {FED_CURRENT_MID_DEFAULT}%.")
+        st.session_state["fed_current_mid"] = _fed_mid_input
+        fed = home_fed_probabilities(current_mid=_fed_mid_input)
         if fed:
-            st.markdown(f"**FOMC {fed.get('meeting','')} — implied** <span style='color:#8a93a3;font-size:.7rem'>(CME method, from Fed Funds futures)</span>", unsafe_allow_html=True)
+            st.markdown(f"**FOMC {fed.get('meeting','')} — implied**"
+                        f" <span style='color:#8a93a3;font-size:.7rem'>(CME method, from Fed Funds futures)</span>",
+                        unsafe_allow_html=True)
             fc1, fc2, fc3 = st.columns(3)
             fc1.metric("Cut 25", f"{fed['p_cut']}%")
             fc2.metric("Hold", f"{fed['p_hold']}%")
             fc3.metric("Hike 25", f"{fed['p_hike']}%")
             if fed.get('p_cut50') or fed.get('p_hike50'):
-                st.caption(f"Tail: 50 bps cut {fed.get('p_cut50',0)}% · 50 bps hike {fed.get('p_hike50',0)}%")
-            st.caption(f"Implies ~{fed['implied_rate']:.2f}% post-meeting vs ~{fed['target_mid']:.2f}% now "
-                       f"({fed['move_bps']:+.0f} bps). Meeting-date-weighted; derived, not CME's published figure.")
+                st.caption(f"50 bps cut {fed.get('p_cut50',0)}% · 50 bps hike {fed.get('p_hike50',0)}%")
+            st.caption(f"ZQ=F implies ~{fed['implied_rate']:.2f}% post-meeting vs {fed['target_mid']:.3f}% now "
+                       f"({fed['move_bps']:+.0f} bps). Meeting-date-weighted; derived, not CME's published number.")
         else:
-            st.info("Fed-futures probabilities temporarily unavailable.")
+            st.info("Fed-futures temporarily unavailable.")
 
         st.markdown("**Treasury Yield Curve**")
         yc = fred_yield_curve()
@@ -6135,19 +6168,24 @@ elif selected == "Macro Dashboard":
 
     with mc_right:
         st.markdown("**Fed: implied next move** <span style='color:#8a93a3;font-size:.72rem'>(derived from Fed Funds futures)</span>", unsafe_allow_html=True)
-        fed = home_fed_probabilities()
+        _fed_mid_macro = st.number_input(
+            "Current target midpoint (%)", min_value=0.0, max_value=10.0,
+            value=float(st.session_state.get("fed_current_mid", FED_CURRENT_MID_DEFAULT)),
+            step=0.25, format="%.3f", key="fed_mid_macro",
+            help="Update whenever the Fed moves rates. Shared with the Home page.")
+        st.session_state["fed_current_mid"] = _fed_mid_macro
+        fed = home_fed_probabilities(current_mid=_fed_mid_macro)
         if fed:
-            st.caption(f"Next meeting: {fed.get('meeting','')}")
+            st.caption(f"Next meeting: **{fed.get('meeting','')}** · ZQ=F @ {fed.get('front_price',0):.4f}")
             fc1, fc2, fc3 = st.columns(3)
             fc1.metric("Cut 25", f"{fed['p_cut']}%")
             fc2.metric("Hold", f"{fed['p_hold']}%")
             fc3.metric("Hike 25", f"{fed['p_hike']}%")
             if fed.get('p_cut50') or fed.get('p_hike50'):
-                st.caption(f"Tail risk: 50 bps cut {fed.get('p_cut50',0)}% · 50 bps hike {fed.get('p_hike50',0)}%")
-            st.caption(f"The meeting-month Fed Funds future implies ~{fed['implied_rate']:.2f}% post-meeting effective rate "
-                       f"vs ~{fed['target_mid']:.2f}% now ({fed['move_bps']:+.0f} bps). Computed with the CME FedWatch "
-                       "methodology (meeting-date-weighted futures), but derived here from the futures curve, not CME's "
-                       "published figure (CME exposes no free API).")
+                st.caption(f"50 bps cut {fed.get('p_cut50',0)}% · 50 bps hike {fed.get('p_hike50',0)}%")
+            st.caption(f"ZQ=F implies ~{fed['implied_rate']:.2f}% post-meeting vs {fed['target_mid']:.3f}% now "
+                       f"({fed['move_bps']:+.0f} bps). CME FedWatch methodology (meeting-date-weighted), "
+                       "derived here from the futures curve — CME exposes no free API.")
             st.markdown("[CME FedWatch (official)](https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html) · "
                         "[Treasury yield curve](https://www.ustreasuryyieldcurve.com/)")
         else:
