@@ -2549,43 +2549,80 @@ import urllib.request as _urlreq
 import xml.etree.ElementTree as _ET
 
 # ---- Ticker tape indices (compact, Yahoo-like) ----
-HOME_TAPE = [
+# ── DYNAMIC TICKER TAPE ──────────────────────────────────────────────────────
+# Two symbol sets: live equity indices when US markets are open, futures after.
+# Non-equity instruments (VIX, Gold, Oil, BTC, rates, Dollar) always show live.
+
+HOME_TAPE_CLOSED = [      # pre/after hours + weekends: show futures
     ("ES=F", "S&P Fut"), ("YM=F", "Dow Fut"), ("NQ=F", "Nasdaq Fut"),
     ("RTY=F", "Rus 2K Fut"), ("^VIX", "VIX"), ("GC=F", "Gold"),
     ("CL=F", "WTI Crude"), ("BTC-USD", "Bitcoin"), ("^TNX", "10Y Yield"),
     ("DX-Y.NYB", "Dollar"),
 ]
+HOME_TAPE_OPEN = [        # 9:30–4:00 ET Mon–Fri: show live index prices
+    ("^GSPC", "S&P 500"), ("^DJI", "Dow"), ("^IXIC", "Nasdaq"),
+    ("^RUT", "Russell 2K"), ("^VIX", "VIX"), ("GC=F", "Gold"),
+    ("CL=F", "WTI Crude"), ("BTC-USD", "Bitcoin"), ("^TNX", "10Y Yield"),
+    ("DX-Y.NYB", "Dollar"),
+]
 
-@st.cache_data(ttl=120)
-def home_tape_quotes():
-    """Compact last/change/%-change for the tape. Returns list of dicts."""
-    out = []
-    syms = [s for s, _ in HOME_TAPE]
+def _market_is_open():
+    """Return True if US equity markets are currently in the regular session."""
     try:
-        data = yf.download(syms, period="2d", interval="1d", progress=False, auto_adjust=False, group_by="ticker")
+        now = datetime.now(ZoneInfo("America/New_York"))
+        if now.weekday() >= 5:                  # Saturday/Sunday
+            return False
+        op = now.replace(hour=9,  minute=30, second=0, microsecond=0)
+        cl = now.replace(hour=16, minute=0,  second=0, microsecond=0)
+        return op <= now <= cl
+    except Exception:
+        return False
+
+@st.cache_data(ttl=60)   # 1-min refresh during session; fine for after-hours too
+def home_tape_quotes():
+    """Compact last/change/%-change. Uses live index prices during open,
+    futures symbols after hours. Non-equity items always live."""
+    open_now = _market_is_open()
+    tape = HOME_TAPE_OPEN if open_now else HOME_TAPE_CLOSED
+    syms = [s for s, _ in tape]
+    # During open: 5-min intraday for the freshest last price.
+    # After close: daily bars (2-day window gives a prev-close for the delta).
+    interval = "5m" if open_now else "1d"
+    period   = "1d" if open_now else "5d"
+    try:
+        data = yf.download(syms, period=period, interval=interval,
+                           progress=False, auto_adjust=True, group_by="ticker")
     except Exception:
         data = None
-    for sym, label in HOME_TAPE:
+    out = []
+    for sym, label in tape:
         last = chg = pct = None
         try:
             if data is not None:
-                if isinstance(data.columns, pd.MultiIndex):
-                    s = data[sym]["Close"].dropna()
+                s = (data[sym]["Close"] if isinstance(data.columns, pd.MultiIndex) else data["Close"]).dropna()
+                if open_now:
+                    # intraday: last tick vs session open (first row of today)
+                    if len(s) >= 2:
+                        last = float(s.iloc[-1])
+                        prev = float(s.iloc[0])   # session open
+                        chg  = last - prev
+                        pct  = chg / prev * 100 if prev else None
+                    elif len(s) == 1:
+                        last = float(s.iloc[-1])
                 else:
-                    s = data["Close"].dropna()
-                if len(s) >= 2:
-                    last, prev = float(s.iloc[-1]), float(s.iloc[-2])
-                    chg = last - prev
-                    pct = chg / prev * 100 if prev else None
-                elif len(s) == 1:
-                    last = float(s.iloc[-1])
+                    # daily: last close vs prior close
+                    if len(s) >= 2:
+                        last = float(s.iloc[-1]); prev = float(s.iloc[-2])
+                        chg  = last - prev
+                        pct  = chg / prev * 100 if prev else None
+                    elif len(s) == 1:
+                        last = float(s.iloc[-1])
         except Exception:
             pass
-        # ^TNX is yield*10 on some feeds; normalize to a yield-looking number
         disp = last
         if sym == "^TNX" and last is not None and last > 100:
             disp = last / 10.0
-        out.append({"label": label, "last": disp, "chg": chg, "pct": pct})
+        out.append({"label": label, "last": disp, "chg": chg, "pct": pct, "open": open_now})
     return out
 
 # ---- Treasury par yield curve (free Treasury fiscal data API) ----
@@ -2963,6 +3000,45 @@ def ai_build_two_date_transactions(notional=AI_PORTFOLIO_NOTIONAL):
 
 
 # ===== FRED, sentiment, improved news (added v8) =====
+def _fred_key():
+    """Read a FRED API key from Streamlit secrets or a session-pasted key.
+    Returns '' if none configured."""
+    try:
+        k = st.secrets.get("FRED_API_KEY", "")
+        if k:
+            return k
+    except Exception:
+        pass
+    return st.session_state.get("user_fred_key", "")
+
+@st.cache_data(ttl=3600)
+def fred_series(series_id, start="2018-01-01", _key=""):
+    """Fetch a FRED series, preferring the official API (more reliable from cloud
+    IPs) and falling back to the no-key CSV endpoint. Returns [(date,value)]."""
+    key = _key or _fred_key()
+    if key:
+        try:
+            url = (f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}"
+                   f"&api_key={key}&file_type=json&observation_start={start}&sort_order=asc")
+            req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with _urlreq.urlopen(req, timeout=20) as r:
+                js = json.loads(r.read())
+            out = []
+            for o in js.get("observations", []):
+                v = o.get("value")
+                if v in ("", ".", None):
+                    continue
+                try:
+                    out.append((o["date"], float(v)))
+                except Exception:
+                    pass
+            if out:
+                return out
+        except Exception:
+            pass
+    # fallback: CSV endpoint (no key)
+    return fred_csv(series_id, start)
+
 @st.cache_data(ttl=3600)
 def fred_csv(series_id, start="2018-01-01"):
     """Fetch a FRED series via the public CSV endpoint (no API key required).
@@ -3284,72 +3360,140 @@ def home_news_pool(max_age_hours=24):
             seen.add(k); out.append((t, s, l, ""))
     return out
 
+import urllib.parse as _up
+
+GOOGLE_NEWS_BASE = "https://news.google.com/rss/search?hl=en-US&gl=US&ceid=US:en&q="
+
+GOOGLE_QUERIES = {
+    # Factors
+    "Fundamentals": "earnings results quarterly revenue profit guidance",
+    "Valuation":    "stock analyst rating price target upgrade downgrade valuation",
+    "Interest Rates": "Federal Reserve interest rate yield treasury bond FOMC",
+    "Policy":       "tariff trade policy government regulation fiscal Congress",
+    "Behavioral / Trends": "stock market rally selloff volatility investors sentiment",
+    # Asset classes
+    "US Equities":  "S&P 500 Nasdaq Dow US stock market today",
+    "International": "China Europe Japan global stocks emerging markets",
+    "Fixed Income": "bond yield treasury fixed income credit high yield",
+    "Commodities / Real Assets": "oil gold crude commodity energy metals real estate",
+}
+
+def _gn_url(topic):
+    q = _up.quote(GOOGLE_QUERIES[topic] + " when:1d")
+    return GOOGLE_NEWS_BASE + q
+
+@st.cache_data(ttl=900)
+def home_news_google(bucket, limit=5):
+    """Fetch headlines from Google News RSS for a specific bucket topic.
+    Returns [(title, source, link, when)] sorted newest-first.
+    Google News handles the 24h filter via 'when:1d' in the query."""
+    if bucket not in GOOGLE_QUERIES:
+        return []
+    try:
+        url = _gn_url(bucket)
+        req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; news-reader/1.0)"})
+        with _urlreq.urlopen(req, timeout=15) as r:
+            root = _ET.fromstring(r.read())
+        items = []
+        for it in root.iter():
+            if not it.tag.lower().endswith(("item","entry")):
+                continue
+            title = link = pub = None
+            for ch in it:
+                ct = ch.tag.lower()
+                if ct.endswith("title") and title is None:
+                    title = (ch.text or "").strip()
+                if ct.endswith("link") and link is None:
+                    link = (ch.text or "").strip() or ch.get("href","")
+                if (ct.endswith("pubdate") or ct.endswith("published")) and pub is None:
+                    pub = ch.text
+            if not title or len(title) < 12:
+                continue
+            low = title.lower()
+            if any(f in low for f in NEWS_FLUFF):
+                continue
+            # Google titles are often "Headline - Source Name"; extract source.
+            source = "Google News"
+            if " - " in title:
+                parts = title.rsplit(" - ", 1)
+                title, source = parts[0].strip(), parts[1].strip()
+            when = ""
+            if pub:
+                try:
+                    import email.utils as _eu
+                    dt = _eu.parsedate_to_datetime(pub.strip())
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                    when = dt.astimezone(ZoneInfo("America/New_York")).strftime("%b %d %I:%M%p")
+                except Exception:
+                    pass
+            items.append((title, source, link, when))
+        return items[:limit]
+    except Exception:
+        return []
+
 def home_news_categorized(lens, per_bucket=4, max_age_hours=24):
-    """Bucket fresh (<=24h) headlines by keyword. Factors allow multi-bucket;
-    Asset Classes assign each headline to its single best class."""
+    """Return dict bucket→[(title,source,link,when)] using Google News as primary
+    source, falling back to the pool+keyword approach if Google fails."""
+    if lens == "Factors":
+        buckets = ["Fundamentals", "Valuation", "Interest Rates", "Policy", "Behavioral / Trends"]
+    else:
+        buckets = ["US Equities", "International", "Fixed Income", "Commodities / Real Assets"]
+
+    result = {}
+    any_google = False
+    for b in buckets:
+        items = home_news_google(b, limit=per_bucket)
+        result[b] = items
+        if items:
+            any_google = True
+
+    if any_google:
+        return result
+
+    # Fallback: pool + keyword matching (broader keywords for better recall)
     pool = home_news_pool(max_age_hours)
-    kw = NEWS_FACTOR_KW if lens == "Factors" else NEWS_ASSET_KW
-    out = {b: [] for b in kw}
+    kw_broad = {
+        "Fundamentals": ["earnings","profit","revenue","guidance","margin","results",
+                         "beat","miss","outlook","quarter","eps","sales","forecast"],
+        "Valuation":    ["valuation","p/e","price target","rating","upgrade","downgrade",
+                         "overvalued","undervalued","expensive","multiple","bubble"],
+        "Interest Rates":["fed","rate","yield","treasury","fomc","powell","monetary",
+                          "rate cut","rate hike","central bank","basis point","bond yield"],
+        "Policy":       ["tariff","trade","regulation","fiscal","tax","congress","policy",
+                         "antitrust","legislation","government","sanction","stimulus"],
+        "Behavioral / Trends":["rally","selloff","sell-off","volatility","fear","greed",
+                               "momentum","bull","bear","record","high","low","gains",
+                               "losses","falls","rises","surge","slide","tumble","drop",
+                               "plunge","rebound","soar","stock market"],
+        "US Equities":  ["s&p","nasdaq","dow","wall street","stocks","equities","shares",
+                         "market","trading","stock market","tech stock","chip"],
+        "International":["china","europe","japan","emerging","eurozone","global","india",
+                         "overseas","eafe","asia","uk ","germany","geopolit"],
+        "Fixed Income": ["bond","treasury","yield","credit","debt","fixed income",
+                         "duration","coupon","high-yield","investment-grade","sovereign"],
+        "Commodities / Real Assets":["oil","crude","gold","copper","commodity","energy",
+                                     "metal","natural gas","silver","wheat","reit"],
+    }
+    out = {b: [] for b in buckets}
     if lens == "Factors":
         for title, source, link, when in pool:
             low = title.lower()
-            for b, words in kw.items():
-                if len(out[b]) >= per_bucket:
-                    continue
-                if any(w in low for w in words):
+            for b in buckets:
+                if len(out[b]) >= per_bucket: continue
+                if any(w in low for w in kw_broad.get(b, [])):
                     out[b].append((title, source, link, when))
     else:
         for title, source, link, when in pool:
             low = title.lower()
             best, best_score = None, 0
-            for b, words in kw.items():
-                score = sum(1 for w in words if w in low)
+            for b in buckets:
+                score = sum(1 for w in kw_broad.get(b, []) if w in low)
                 if score > best_score:
                     best, best_score = b, score
             if best and len(out[best]) < per_bucket:
                 out[best].append((title, source, link, when))
     return out
-
-# ---------- FRED: official API (key) with CSV fallback ----------
-def _fred_key():
-    """Read a FRED API key from Streamlit secrets or a session-pasted key.
-    Returns '' if none configured."""
-    try:
-        k = st.secrets.get("FRED_API_KEY", "")
-        if k:
-            return k
-    except Exception:
-        pass
-    return st.session_state.get("user_fred_key", "")
-
-@st.cache_data(ttl=3600)
-def fred_series(series_id, start="2018-01-01", _key=""):
-    """Fetch a FRED series, preferring the official API (more reliable from cloud
-    IPs) and falling back to the no-key CSV endpoint. Returns [(date,value)]."""
-    key = _key or _fred_key()
-    if key:
-        try:
-            url = (f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}"
-                   f"&api_key={key}&file_type=json&observation_start={start}&sort_order=asc")
-            req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with _urlreq.urlopen(req, timeout=20) as r:
-                js = json.loads(r.read())
-            out = []
-            for o in js.get("observations", []):
-                v = o.get("value")
-                if v in ("", ".", None):
-                    continue
-                try:
-                    out.append((o["date"], float(v)))
-                except Exception:
-                    pass
-            if out:
-                return out
-        except Exception:
-            pass
-    # fallback: CSV endpoint (no key)
-    return fred_csv(series_id, start)
-
 
 # ===== Home market snapshot chart (added v9) =====
 @st.cache_data(ttl=600)
@@ -3411,10 +3555,15 @@ if selected == "Home":
             f"<span style='color:#e5e7eb;font-size:.92rem'>{last_txt}</span>"
             f"<span style='color:{color};font-size:.88rem'>{pct_txt}</span></span>"
         )
+    mkt_label = ("<span style='background:#16a34a;color:#fff;font-size:.62rem;padding:2px 7px;"
+                  "border-radius:3px;font-family:monospace;margin-right:8px;'>● LIVE</span>"
+                  if (tape and tape[0].get("open")) else
+                  "<span style='background:#374151;color:#9aa4b2;font-size:.62rem;padding:2px 7px;"
+                  "border-radius:3px;font-family:monospace;margin-right:8px;'>FUTURES</span>")
     st.markdown(
         "<div style='background:#0e1117;border:1px solid #1f2530;border-radius:8px;"
         "padding:8px 8px;overflow-x:auto;white-space:nowrap;margin-bottom:16px'>"
-        + "".join(chips) + "</div>", unsafe_allow_html=True)
+        + mkt_label + "".join(chips) + "</div>", unsafe_allow_html=True)
 
     st.title("Market Dashboard")
 
