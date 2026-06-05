@@ -2207,40 +2207,184 @@ def em_review_flag(ticker, price_now, gap_threshold=10.0):
     status = "🔴 REVIEW" if reasons else "🟢 OK"
     return status, reasons
 
-def em_claude_interpret(api_key, ticker, headlines, gap, earnings_info):
-    """OPT-IN ONLY. Uses the USER'S OWN Anthropic API key to summarize whether
-    recent news looks like a fundamental re-rate vs noise. Never called unless the
-    user pastes their own key and clicks the button, so it cannot charge the app
-    owner's credits. Returns a short string or an error message."""
-    if not api_key:
-        return "No API key provided."
+@st.cache_data(ttl=1800)
+def em_earnings_data(ticker):
+    """Gather a structured earnings data package for the analysis prompt.
+    Returns a dict with all fields, each gracefully None on failure."""
+    out = {"ticker": ticker, "eps_history": [], "revenue": None, "revenue_growth": None,
+           "eps_ttm": None, "eps_fwd": None, "eps_growth": None, "target_price": None,
+           "analyst_rec": None, "analyst_count": None, "rec_breakdown": {},
+           "recent_move_1d": None, "recent_move_5d": None, "recent_move_ytd": None,
+           "market_cap": None, "pe_fwd": None, "pe_trail": None, "peg": None,
+           "gross_margin": None, "oper_margin": None, "free_cashflow": None,
+           "next_earnings": None, "last_earnings_date": None}
     try:
-        import urllib.request, json as _json
-        head_txt = "\n".join(f"- {h[0]} ({h[1]})" for h in headlines) or "No headlines."
-        prompt = (
-            f"You are a sell-side equity analyst. Ticker: {ticker}. "
-            f"1-day move: {gap:+.1f}% if known. Next/last earnings: {earnings_info}. "
-            f"Recent headlines:\n{head_txt}\n\n"
-            "In 3 sentences: is this likely a FUNDAMENTAL re-rate (guidance/earnings/contract that "
-            "changes fair value) or NOISE (momentum/sympathy/macro)? If fundamental, say whether "
-            "estimates likely moved up or down. Be specific and concise. End with: VERDICT: RE-RATE or VERDICT: NOISE."
-        )
-        body = _json.dumps({
-            "model": "claude-3-5-haiku-20241022",
-            "max_tokens": 300,
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+        out["eps_ttm"]       = info.get("trailingEps")
+        out["eps_fwd"]       = info.get("forwardEps")
+        out["eps_growth"]    = info.get("earningsGrowth")
+        out["revenue"]       = info.get("totalRevenue")
+        out["revenue_growth"]= info.get("revenueGrowth")
+        out["target_price"]  = info.get("targetMeanPrice")
+        out["analyst_rec"]   = info.get("recommendationKey", "").replace("_", " ").title()
+        out["analyst_count"] = info.get("numberOfAnalystOpinions")
+        out["market_cap"]    = info.get("marketCap")
+        out["pe_fwd"]        = info.get("forwardPE")
+        out["pe_trail"]      = info.get("trailingPE")
+        out["peg"]           = info.get("trailingPegRatio") or info.get("pegRatio")
+        out["gross_margin"]  = info.get("grossMargins")
+        out["oper_margin"]   = info.get("operatingMargins")
+        out["free_cashflow"] = info.get("freeCashflow")
+        # Recommendation breakdown (strong buy/buy/hold/sell)
+        try:
+            recs = t.recommendations
+            if recs is not None and not recs.empty:
+                recent_recs = recs.tail(20)
+                for col in ["strongBuy", "buy", "hold", "sell", "strongSell"]:
+                    if col in recent_recs.columns:
+                        out["rec_breakdown"][col] = int(recent_recs[col].sum())
+        except Exception:
+            pass
+        # EPS beat-miss history from get_earnings_dates (yfinance 0.2.x+)
+        try:
+            edates = t.get_earnings_dates(limit=8)
+            if edates is not None and not edates.empty:
+                for idx, row in edates.iterrows():
+                    est = row.get("EPS Estimate"); rep = row.get("Reported EPS")
+                    surp = row.get("Surprise(%)")
+                    if pd.notna(est) or pd.notna(rep):
+                        out["eps_history"].append({
+                            "date": str(idx.date()),
+                            "estimate": round(float(est), 3) if pd.notna(est) else None,
+                            "reported": round(float(rep), 3) if pd.notna(rep) else None,
+                            "surprise_pct": round(float(surp), 1) if pd.notna(surp) else None,
+                        })
+        except Exception:
+            pass
+        # Recent price action
+        try:
+            h = t.history(period="1y", interval="1d")
+            if not h.empty:
+                p_now = float(h["Close"].iloc[-1])
+                p_1d  = float(h["Close"].iloc[-2]) if len(h) > 1 else None
+                p_5d  = float(h["Close"].iloc[-6]) if len(h) > 5 else None
+                p_ytd_start = h[h.index.year == h.index[-1].year]["Close"].iloc[0]
+                if p_1d:  out["recent_move_1d"]  = round((p_now/p_1d  - 1)*100, 2)
+                if p_5d:  out["recent_move_5d"]  = round((p_now/p_5d  - 1)*100, 2)
+                out["recent_move_ytd"] = round((p_now/float(p_ytd_start) - 1)*100, 2)
+        except Exception:
+            pass
+        # Next/last earnings
+        try:
+            ei = em_earnings_info(ticker)
+            out["next_earnings"]      = ei.get("next")
+            out["last_earnings_date"] = ei.get("last")
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return out
+
+def em_earnings_analysis(api_key, ticker, model="claude-haiku-4-5-20251001"):
+    """Full earnings analysis using the user's own Anthropic API key.
+    Pulls a comprehensive data package and asks Claude for a structured
+    analysis covering: last-quarter results, guidance, thesis validation,
+    and whether conviction should change. Never uses a built-in key."""
+    if not api_key:
+        return None, "No API key provided."
+    # gather data
+    data = em_earnings_data(ticker)
+    heads = em_headlines(ticker, n=8)
+    # find this holding's thesis from the portfolio (if loaded)
+    thesis = ""
+    try:
+        for h in ai_load_portfolio():
+            if h["ticker"] == ticker:
+                thesis = h.get("thesis", ""); break
+    except Exception:
+        pass
+    # format the data package for the prompt
+    def _fmt(v, suffix="", scale=1, decimals=2):
+        return f"{v*scale:.{decimals}f}{suffix}" if v is not None else "n/a"
+    def _fmt_big(v):
+        if v is None: return "n/a"
+        if abs(v) >= 1e9: return f"${v/1e9:.1f}B"
+        if abs(v) >= 1e6: return f"${v/1e6:.1f}M"
+        return f"${v:,.0f}"
+    eps_block = ""
+    if data["eps_history"]:
+        eps_block = "Quarterly EPS history (most recent first):\n"
+        for e in data["eps_history"][:4]:
+            surp = f" (surprise {e['surprise_pct']:+.1f}%)" if e['surprise_pct'] is not None else ""
+            eps_block += f"  {e['date']}: est {e['estimate']}, reported {e['reported']}{surp}\n"
+    else:
+        eps_block = "Quarterly EPS history: not available from data provider.\n"
+    rec_block = ""
+    if data["rec_breakdown"]:
+        r = data["rec_breakdown"]
+        rec_block = (f"Recent analyst votes: strong buy {r.get('strongBuy',0)}, "
+                     f"buy {r.get('buy',0)}, hold {r.get('hold',0)}, "
+                     f"sell {r.get('sell',0)}, strong sell {r.get('strongSell',0)}")
+    news_block = "\n".join(f"- {h[0]} ({h[1]})" for h in heads) or "No recent headlines."
+    prompt = f"""You are a buy-side equity analyst at an AI-focused hedge fund.
+Analyze the following data for {ticker} and produce a concise, actionable earnings analysis.
+
+=== FUNDAMENTAL DATA ===
+EPS (trailing/forward): {_fmt(data['eps_ttm'])}/{_fmt(data['eps_fwd'])}
+EPS growth (YoY): {_fmt(data['eps_growth'], '%', 100)}
+Revenue (TTM): {_fmt_big(data['revenue'])} | Revenue growth: {_fmt(data['revenue_growth'], '%', 100)}
+Gross margin: {_fmt(data['gross_margin'], '%', 100)} | Operating margin: {_fmt(data['oper_margin'], '%', 100)}
+Free cash flow: {_fmt_big(data['free_cashflow'])}
+Fwd P/E: {_fmt(data['pe_fwd'])} | PEG: {_fmt(data['peg'])}
+Market cap: {_fmt_big(data['market_cap'])} | Analyst price target: {_fmt(data['target_price'], '$' if data['target_price'] else '')}
+Analyst consensus: {data['analyst_rec'] or 'n/a'} ({data['analyst_count'] or '?'} analysts)
+{rec_block}
+
+=== RECENT PRICE ACTION ===
+1-day: {_fmt(data['recent_move_1d'], '%')} | 5-day: {_fmt(data['recent_move_5d'], '%')} | YTD: {_fmt(data['recent_move_ytd'], '%')}
+Last earnings date: {data['last_earnings_date'] or 'n/a'} | Next: {data['next_earnings'] or 'n/a'}
+
+=== QUARTERLY EPS HISTORY ===
+{eps_block}
+=== RECENT HEADLINES ===
+{news_block}
+
+=== PORTFOLIO THESIS ===
+{thesis or '(no thesis stored)'}
+
+=== TASK ===
+Produce a structured earnings analysis with EXACTLY these four sections:
+
+**LAST QUARTER RESULTS**
+Two-to-three sentences on the most recent quarter: EPS beat or miss vs estimate, revenue growth, margin trajectory. Quantify where possible.
+
+**GUIDANCE & FORWARD OUTLOOK**
+Two sentences on what the company is signaling about the next quarter or year, based on the data and headlines.
+
+**THESIS VALIDATION**
+One or two sentences: do the results confirm, challenge, or are neutral to the portfolio thesis above? Cite specific data points.
+
+**CONVICTION: RAISE / MAINTAIN / LOWER**
+One sentence verdict with the word RAISE, MAINTAIN, or LOWER. Then one sentence on the single biggest risk to watch.
+"""
+    try:
+        import urllib.request as _ur, json as _js
+        body = _js.dumps({
+            "model": model,
+            "max_tokens": 600,
             "messages": [{"role": "user", "content": prompt}],
         }).encode()
-        req = urllib.request.Request(
+        req = _ur.Request(
             "https://api.anthropic.com/v1/messages", data=body,
             headers={"Content-Type": "application/json", "x-api-key": api_key,
                      "anthropic-version": "2023-06-01"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = _json.loads(r.read())
-        parts = data.get("content", [])
-        return "".join(p.get("text", "") for p in parts if p.get("type") == "text") or "No response."
+        with _ur.urlopen(req, timeout=45) as r:
+            resp = _js.loads(r.read())
+        text = "".join(p.get("text", "") for p in resp.get("content", []) if p.get("type") == "text")
+        return data, text or "No response."
     except Exception as e:
-        return f"Claude call failed: {e}"
-
+        return data, f"Claude call failed: {e}"
 # ===== Transactions / batting average / attribution helpers (added) =====
 AI_REBALANCE_DATE = "2026-06-01"   # rebalance executed at this session's close
 AI_PORTFOLIO_NOTIONAL = 100000.0   # $100k example book for share counts
@@ -5786,24 +5930,41 @@ elif selected == "AI Strategy":
         else:
             st.info("No recent headlines returned for this name.")
 
-        with st.expander("🤖 Optional: interpret with your own Claude API key"):
+        with st.expander("🤖 Earnings Analysis — use your own Claude API key", expanded=False):
             st.caption(
-                "This is OFF by default and uses **your own** Anthropic API key, entered below. "
-                "It is never stored and never uses any built-in key, so it cannot charge anyone else's credits. "
-                "Leave blank to skip. One call summarizes whether the recent move looks like a fundamental "
-                "re-rate or noise."
+                "Uses **your own** Anthropic API key — never stored, never charges anyone else's credits. "
+                "Gathers quarterly EPS beat/miss history, revenue, margins, analyst recs, and recent headlines, "
+                "then asks Claude for a structured analysis: last-quarter results, guidance, thesis validation, "
+                "and whether conviction should be raised, maintained, or lowered."
             )
-            user_key = st.text_input("Your Anthropic API key (sk-ant-...)", type="password", key="em_api_key")
-            if st.button("Interpret recent news for " + pick, key="em_interpret_btn"):
+            _col_key, _col_model = st.columns([3, 1])
+            with _col_key:
+                user_key = st.text_input("Anthropic API key (sk-ant-...)", type="password", key="em_api_key")
+            with _col_model:
+                _model_choice = st.selectbox("Model", ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+                                             key="em_model", help="Haiku = faster/cheaper; Sonnet = deeper analysis")
+            if st.button(f"📊 Analyse {pick} earnings", key="em_analyse_btn", use_container_width=True):
                 if not user_key:
-                    st.warning("Enter your own API key to use this. It stays in your session only.")
+                    st.warning("Paste your API key above to run the analysis.")
                 else:
-                    gap = em_recent_move(pick) or 0.0
-                    ei = em_earnings_info(pick)
-                    with st.spinner("Asking Claude (your key)..."):
-                        msg = em_claude_interpret(user_key, pick, heads, gap, ei)
-                    st.markdown(msg)
-                    st.caption("Interpretation only. Decision and conviction changes remain yours.")
+                    with st.spinner(f"Gathering {pick} data and running analysis..."):
+                        edata, analysis_text = em_earnings_analysis(user_key, pick, model=_model_choice)
+                    if edata:
+                        # show the data package that was sent to Claude
+                        with st.expander("📋 Data used in analysis", expanded=False):
+                            _d1, _d2, _d3 = st.columns(3)
+                            _d1.metric("Fwd P/E", f"{edata['pe_fwd']:.1f}" if edata['pe_fwd'] else "n/a")
+                            _d2.metric("EPS (fwd)", f"${edata['eps_fwd']:.2f}" if edata['eps_fwd'] else "n/a")
+                            _d3.metric("Analyst rec", edata['analyst_rec'] or "n/a",
+                                       f"{edata['analyst_count']} analysts" if edata['analyst_count'] else None,
+                                       delta_color="off")
+                            if edata["eps_history"]:
+                                ep = pd.DataFrame(edata["eps_history"][:4])
+                                ep.columns = [c.title() for c in ep.columns]
+                                st.dataframe(ep, use_container_width=True, hide_index=True)
+                    st.markdown(analysis_text)
+                    st.caption(f"Analysis by {_model_choice} using your API key. For information only — "
+                               "fundamental research and conviction changes remain your own judgment.")
 
     # ---------------- TRANSACTIONS ----------------
     with ai_tabs[8]:
