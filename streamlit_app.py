@@ -175,6 +175,46 @@ st.set_page_config(page_title="DJR Trading System", layout="wide")
 st.title("DJR Trading System 🚀")
 st.caption("✨ Full Trading System | Backtest | Live Trading | Signal History | Persistent Storage")
 
+# ========================================
+# NAVIGATION — grouped sidebar (Home / Trading Hub / Markets / Research / My Portfolios)
+# Sets `selected` to the same page-name strings the page branches below expect,
+# so all existing pages keep working. Collapses to a hamburger on mobile.
+# ========================================
+NAV_GROUPS = {
+    "🏠 Home": ["Home"],
+    "📈 Trading Hub": ["Trading Hub", "Signal History", "Backtest", "Trade Log", "Performance", "Premium Seller"],
+    "🌐 Markets": ["Market Dashboard", "Macro Dashboard"],
+    "🔬 Research": ["Chart Analysis", "Options Chain"],
+    "💼 My Portfolios": ["AI Strategy"],
+}
+PAGE_ICONS = {
+    "Home": "house", "Trading Hub": "activity", "Signal History": "clock-history",
+    "Backtest": "graph-up-arrow", "Trade Log": "list-ul", "Performance": "trophy",
+    "Premium Seller": "shield-check", "Market Dashboard": "speedometer2",
+    "Macro Dashboard": "globe", "Chart Analysis": "bar-chart", "Options Chain": "currency-exchange",
+    "AI Strategy": "cpu",
+}
+
+if "nav_page" not in st.session_state:
+    st.session_state.nav_page = "Home"
+
+with st.sidebar:
+    st.markdown("### DJR Trading System")
+    for group, pages in NAV_GROUPS.items():
+        if len(pages) == 1:
+            # single-page group: one button
+            if st.button(group, use_container_width=True, key=f"navbtn_{pages[0]}"):
+                st.session_state.nav_page = pages[0]
+        else:
+            with st.expander(group, expanded=(st.session_state.nav_page in pages)):
+                for pg in pages:
+                    label = ("▸ " if st.session_state.nav_page == pg else "　") + pg
+                    if st.button(label, use_container_width=True, key=f"navbtn_{pg}"):
+                        st.session_state.nav_page = pg
+    st.divider()
+
+selected = st.session_state.nav_page
+
 # Persistent Storage Paths
 DATA_DIR = Path("trading_data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -2253,20 +2293,360 @@ def ai_attribution_by_tier(per, bench_per):
     return rows, totals
 
 
-selected = option_menu(
-    menu_title=None,
-    options=["Trading Hub", "Market Dashboard", "Signal History", "Backtest", "Trade Log", "Performance", "Chart Analysis", "Options Chain", "Premium Seller", "AI Strategy", "Macro Dashboard"],
-    icons=["activity", "speedometer2", "clock-history", "graph-up-arrow", "list-ul", "trophy", "bar-chart", "currency-exchange", "shield-check", "cpu", "globe"],
-    menu_icon="cast",
-    default_index=0,
-    orientation="horizontal"
-)
+# ===== Home dashboard data helpers (added) =====
+import urllib.request as _urlreq
+import xml.etree.ElementTree as _ET
+
+# ---- Ticker tape indices (compact, Yahoo-like) ----
+HOME_TAPE = [
+    ("ES=F", "S&P Fut"), ("YM=F", "Dow Fut"), ("NQ=F", "Nasdaq Fut"),
+    ("RTY=F", "Rus 2K Fut"), ("^VIX", "VIX"), ("GC=F", "Gold"),
+    ("CL=F", "WTI Crude"), ("BTC-USD", "Bitcoin"), ("^TNX", "10Y Yield"),
+    ("DX-Y.NYB", "Dollar"),
+]
+
+@st.cache_data(ttl=120)
+def home_tape_quotes():
+    """Compact last/change/%-change for the tape. Returns list of dicts."""
+    out = []
+    syms = [s for s, _ in HOME_TAPE]
+    try:
+        data = yf.download(syms, period="2d", interval="1d", progress=False, auto_adjust=False, group_by="ticker")
+    except Exception:
+        data = None
+    for sym, label in HOME_TAPE:
+        last = chg = pct = None
+        try:
+            if data is not None:
+                if isinstance(data.columns, pd.MultiIndex):
+                    s = data[sym]["Close"].dropna()
+                else:
+                    s = data["Close"].dropna()
+                if len(s) >= 2:
+                    last, prev = float(s.iloc[-1]), float(s.iloc[-2])
+                    chg = last - prev
+                    pct = chg / prev * 100 if prev else None
+                elif len(s) == 1:
+                    last = float(s.iloc[-1])
+        except Exception:
+            pass
+        # ^TNX is yield*10 on some feeds; normalize to a yield-looking number
+        disp = last
+        if sym == "^TNX" and last is not None and last > 100:
+            disp = last / 10.0
+        out.append({"label": label, "last": disp, "chg": chg, "pct": pct})
+    return out
+
+# ---- Treasury par yield curve (free Treasury fiscal data API) ----
+@st.cache_data(ttl=3600)
+def home_yield_curve():
+    """Latest Treasury par yields across maturities + the prior month for shape
+    comparison. Returns dict: {'date':..., 'latest':[(label,yield)...],
+    'prior':[(label,yield)...], 'prior_date':...} or {} on failure."""
+    base = ("https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
+            "/v1/accounting/od/avg_interest_rates")
+    # That endpoint is monthly avg; for daily par yields use the daily dataset:
+    daily = ("https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
+             "/v2/accounting/od/daily_treasury_yield_curve"
+             "?sort=-record_date&page[size]=40")
+    cols = [("bc_1month","1M"),("bc_2month","2M"),("bc_3month","3M"),("bc_4month","4M"),
+            ("bc_6month","6M"),("bc_1year","1Y"),("bc_2year","2Y"),("bc_3year","3Y"),
+            ("bc_5year","5Y"),("bc_7year","7Y"),("bc_10year","10Y"),("bc_20year","20Y"),
+            ("bc_30year","30Y")]
+    try:
+        req = _urlreq.Request(daily, headers={"User-Agent": "Mozilla/5.0"})
+        with _urlreq.urlopen(req, timeout=20) as r:
+            js = json.loads(r.read())
+        rows = js.get("data", [])
+        if not rows:
+            return {}
+        def parse(row):
+            pts = []
+            for key, lab in cols:
+                v = row.get(key)
+                try:
+                    if v not in (None, "", "null"):
+                        pts.append((lab, float(v)))
+                except Exception:
+                    pass
+            return pts
+        latest = parse(rows[0])
+        prior = None; prior_date = None
+        # find a row ~21 trading rows back (≈1 month) for shape comparison
+        if len(rows) > 21:
+            prior = parse(rows[21]); prior_date = rows[21].get("record_date")
+        return {"date": rows[0].get("record_date"), "latest": latest,
+                "prior": prior, "prior_date": prior_date}
+    except Exception:
+        return {}
+
+def home_yield_curve_figure(yc):
+    """Interactive Plotly yield-curve chart: today vs ~1 month ago, with 2s10s."""
+    if not yc or not yc.get("latest"):
+        return None
+    labs = [l for l, _ in yc["latest"]]
+    ys = [v for _, v in yc["latest"]]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=labs, y=ys, mode="lines+markers", name=f"Today ({yc.get('date','')})",
+                             line=dict(color="#2dd4bf", width=2.5), marker=dict(size=6)))
+    if yc.get("prior"):
+        pl = [l for l, _ in yc["prior"]]; pv = [v for _, v in yc["prior"]]
+        fig.add_trace(go.Scatter(x=pl, y=pv, mode="lines+markers",
+                                 name=f"~1mo prior ({yc.get('prior_date','')})",
+                                 line=dict(color="#94a3b8", width=1.5, dash="dot"), marker=dict(size=4)))
+    fig.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="#c9d4e0"), legend=dict(orientation="h", y=1.12, x=0),
+                      hovermode="x unified")
+    fig.update_yaxes(title_text="Yield (%)", gridcolor="rgba(120,130,140,0.12)")
+    fig.update_xaxes(title_text="Maturity", gridcolor="rgba(120,130,140,0.12)")
+    return fig
+
+def home_curve_spreads(yc):
+    """Key curve spreads (2s10s, 3m10y) in bps from the latest curve."""
+    if not yc or not yc.get("latest"):
+        return {}
+    d = dict(yc["latest"])
+    out = {}
+    if "2Y" in d and "10Y" in d:
+        out["2s10s"] = round((d["10Y"] - d["2Y"]) * 100)
+    if "3M" in d and "10Y" in d:
+        out["3m10y"] = round((d["10Y"] - d["3M"]) * 100)
+    return out
+
+# ---- Derived Fed rate-move probabilities from Fed Funds futures ----
+@st.cache_data(ttl=3600)
+def home_fed_probabilities():
+    """Approximate probabilities for the next FOMC using 30-day Fed Funds
+    futures (ZQ). The futures price implies an average effective FF rate for the
+    contract month: implied_rate = 100 - price. Comparing the front-month implied
+    rate to the current target midpoint gives an expected move, which we translate
+    into cut / hold / hike probabilities. This mirrors the logic behind CME
+    FedWatch but is our own derivation, not CME's official figure."""
+    try:
+        # current target midpoint — approximate from the effective rate proxy.
+        # Use ^IRX (13-week T-bill discount) only as a sanity fallback.
+        # Front two Fed Funds futures months:
+        zq = yf.Ticker("ZQ=F")
+        h = zq.history(period="5d", interval="1d")
+        if h.empty:
+            return {}
+        price = float(h["Close"].iloc[-1])
+        implied = 100 - price  # implied avg FF rate for the contract month (%)
+        # assume current target midpoint is the nearest 0.25 increment at/above implied-ish.
+        # We infer the active midpoint as the rounded implied to nearest 25 bps.
+        mid = round(implied * 4) / 4
+        move_bps = (implied - mid) * 100  # negative => market pricing cuts
+        # Translate expected move into probabilities with a simple, transparent map.
+        # A full 25 bps cut priced => ~100% cut; halfway => ~50%, etc.
+        p_cut = max(0.0, min(1.0, -move_bps / 25.0))
+        p_hike = max(0.0, min(1.0, move_bps / 25.0))
+        p_hold = max(0.0, 1.0 - p_cut - p_hike)
+        return {"implied_rate": round(implied, 3), "target_mid": round(mid, 3),
+                "move_bps": round(move_bps, 1),
+                "p_cut": round(p_cut * 100), "p_hold": round(p_hold * 100),
+                "p_hike": round(p_hike * 100), "front_price": round(price, 4)}
+    except Exception:
+        return {}
+
+# ---- Macro snapshot (rates, curve, vol, dollar, commodities) ----
+@st.cache_data(ttl=300)
+def home_macro_snapshot():
+    """A compact set of macro reads for the dashboard + Macro page."""
+    out = {}
+    syms = {"^TNX": "10Y", "^FVX": "5Y", "^IRX": "13W TBill", "^TYX": "30Y",
+            "^VIX": "VIX", "DX-Y.NYB": "DXY", "CL=F": "WTI", "GC=F": "Gold", "HG=F": "Copper"}
+    try:
+        data = yf.download(list(syms), period="5d", interval="1d", progress=False, auto_adjust=False, group_by="ticker")
+        for sym, lab in syms.items():
+            try:
+                s = data[sym]["Close"].dropna() if isinstance(data.columns, pd.MultiIndex) else data["Close"].dropna()
+                if len(s) >= 1:
+                    v = float(s.iloc[-1])
+                    if sym in ("^TNX", "^FVX", "^IRX", "^TYX") and v > 100:
+                        v /= 10.0
+                    chg = (float(s.iloc[-1]) - float(s.iloc[-2])) if len(s) >= 2 else None
+                    if chg is not None and sym in ("^TNX", "^FVX", "^IRX", "^TYX") and abs(chg) > 1:
+                        chg /= 10.0
+                    out[lab] = {"value": v, "change": chg}
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+# ---- News feed: free RSS from reputable sources, bucketed by theme ----
+# Map each source feed to one of our factor / asset-class buckets.
+HOME_NEWS_FEEDS = {
+    # Factors
+    "Fundamentals": [("https://feeds.content.dowjones.io/public/rss/mw_topstories", "MarketWatch"),
+                     ("https://www.cnbc.com/id/100003114/device/rss/rss.html", "CNBC")],
+    "Valuation":    [("https://www.cnbc.com/id/15839135/device/rss/rss.html", "CNBC Markets")],
+    "Interest Rates": [("https://www.federalreserve.gov/feeds/press_all.xml", "Federal Reserve"),
+                       ("https://home.treasury.gov/system/files/126/rss.xml", "US Treasury")],
+    "Policy":       [("https://apnews.com/index.rss", "AP")],
+    "Behavioral / Trends": [("https://www.cnbc.com/id/10000664/device/rss/rss.html", "CNBC Econ")],
+    # Asset classes
+    "US Equities":  [("https://www.cnbc.com/id/15839135/device/rss/rss.html", "CNBC")],
+    "International": [("https://www.cnbc.com/id/19794221/device/rss/rss.html", "CNBC World")],
+    "Fixed Income": [("https://www.cnbc.com/id/15839069/device/rss/rss.html", "CNBC Bonds")],
+    "Commodities / Real Assets": [("https://www.cnbc.com/id/15839074/device/rss/rss.html", "CNBC Commodities")],
+}
+
+@st.cache_data(ttl=900)
+def home_news(bucket, limit=5):
+    """Pull recent headlines for a bucket from its RSS feeds. Returns list of
+    (title, source, link). Degrades to [] if feeds are unreachable."""
+    feeds = HOME_NEWS_FEEDS.get(bucket, [])
+    items = []
+    for url, source in feeds:
+        try:
+            req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with _urlreq.urlopen(req, timeout=12) as r:
+                raw = r.read()
+            root = _ET.fromstring(raw)
+            # RSS <item> or Atom <entry>
+            for it in root.iter():
+                tag = it.tag.lower()
+                if tag.endswith("item") or tag.endswith("entry"):
+                    title = None; link = None
+                    for ch in it:
+                        ct = ch.tag.lower()
+                        if ct.endswith("title") and title is None:
+                            title = (ch.text or "").strip()
+                        if ct.endswith("link") and link is None:
+                            link = (ch.text or "").strip() or ch.get("href")
+                    if title:
+                        items.append((title, source, link))
+        except Exception:
+            continue
+    # de-dup by title, keep order
+    seen = set(); uniq = []
+    for t, s, l in items:
+        if t not in seen:
+            seen.add(t); uniq.append((t, s, l))
+    return uniq[:limit]
+
+
+
+
+# ========================================
+# HOME — Market Dashboard (landing page)
+# ========================================
+selected = st.session_state.nav_page
+if selected == "Home":
+    # ---- compact ticker tape ----
+    tape = home_tape_quotes()
+    chips = []
+    for q in tape:
+        if q["last"] is None:
+            continue
+        pct = q["pct"]
+        color = "#9aa4b2" if pct is None else ("#34d399" if pct >= 0 else "#f87171")
+        arrow = "" if pct is None else ("▲" if pct >= 0 else "▼")
+        last_txt = f"{q['last']:,.2f}"
+        pct_txt = "" if pct is None else f" {arrow}{abs(pct):.2f}%"
+        chips.append(
+            f"<span style='display:inline-block;padding:4px 12px;margin:2px;border-right:1px solid #2a2f3a;white-space:nowrap;'>"
+            f"<b style='color:#cbd5e1;font-size:.72rem'>{q['label']}</b> "
+            f"<span style='color:#e5e7eb;font-size:.72rem'>{last_txt}</span>"
+            f"<span style='color:{color};font-size:.7rem'>{pct_txt}</span></span>"
+        )
+    st.markdown(
+        "<div style='background:#0e1117;border:1px solid #1f2530;border-radius:8px;"
+        "padding:4px 6px;overflow-x:auto;white-space:nowrap;margin-bottom:14px'>"
+        + "".join(chips) + "</div>", unsafe_allow_html=True)
+
+    st.title("Market Dashboard")
+    st.caption(f"Real-time market context · {datetime.now(ZoneInfo('US/Eastern')).strftime('%A, %B %d, %Y · %I:%M %p ET')}")
+
+    # ---- top row: macro snapshot strip ----
+    snap = home_macro_snapshot()
+    if snap:
+        order = ["10Y", "2Y", "30Y", "VIX", "DXY", "WTI", "Gold", "Copper"]
+        present = [k for k in order if k in snap] or list(snap.keys())
+        scols = st.columns(len(present))
+        for i, k in enumerate(present):
+            v = snap[k]["value"]; ch = snap[k].get("change")
+            is_rate = k in ("10Y", "2Y", "30Y", "13W TBill")
+            val_txt = f"{v:.2f}%" if is_rate else f"{v:,.2f}"
+            delta_txt = None
+            if ch is not None:
+                delta_txt = (f"{ch:+.02f}" + ("pp" if is_rate else ""))
+            scols[i].metric(k, val_txt, delta_txt, delta_color="inverse" if k == "VIX" else "normal")
+    st.divider()
+
+    # ---- main grid: news (left, wide) + rates/curve (right) ----
+    left, right = st.columns([1.35, 1])
+
+    with left:
+        st.markdown("#### Headlines")
+        news_view = st.radio("Lens", ["Factors", "Asset Classes"], horizontal=True, key="home_news_lens",
+                             label_visibility="collapsed")
+        if news_view == "Factors":
+            buckets = ["Fundamentals", "Valuation", "Interest Rates", "Policy", "Behavioral / Trends"]
+        else:
+            buckets = ["US Equities", "International", "Fixed Income", "Commodities / Real Assets"]
+        any_news = False
+        for b in buckets:
+            items = home_news(b, limit=4)
+            if not items:
+                continue
+            any_news = True
+            st.markdown(f"**{b}**")
+            for title, source, link in items:
+                if link:
+                    st.markdown(f"- [{title}]({link})  <span style='color:#8a93a3;font-size:.72rem'>· {source}</span>",
+                                unsafe_allow_html=True)
+                else:
+                    st.markdown(f"- {title}  <span style='color:#8a93a3;font-size:.72rem'>· {source}</span>",
+                                unsafe_allow_html=True)
+        if not any_news:
+            st.info("Headlines are temporarily unavailable (news feeds unreachable). Market data above is unaffected.")
+        st.caption("Headlines from free public feeds (CNBC, AP, MarketWatch, Federal Reserve, US Treasury). "
+                   "Paywalled outlets (WSJ, FT, Barron's) are not available via free APIs.")
+
+    with right:
+        st.markdown("#### Rates & the Fed")
+        # Fed probabilities (derived)
+        fed = home_fed_probabilities()
+        if fed:
+            st.markdown("**Next FOMC — implied move** <span style='color:#8a93a3;font-size:.7rem'>(derived from Fed Funds futures)</span>", unsafe_allow_html=True)
+            fc1, fc2, fc3 = st.columns(3)
+            fc1.metric("Cut", f"{fed['p_cut']}%")
+            fc2.metric("Hold", f"{fed['p_hold']}%")
+            fc3.metric("Hike", f"{fed['p_hike']}%")
+            st.caption(f"Front Fed Funds future implies ~{fed['implied_rate']:.2f}% avg vs ~{fed['target_mid']:.2f}% target "
+                       f"({fed['move_bps']:+.0f} bps). Derived, not CME's official FedWatch figure.")
+        else:
+            st.info("Fed-futures probabilities temporarily unavailable.")
+
+        st.markdown("**Treasury Yield Curve**")
+        yc = home_yield_curve()
+        fig = home_yield_curve_figure(yc)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
+            sp = home_curve_spreads(yc)
+            if sp:
+                s1, s2 = st.columns(2)
+                if "2s10s" in sp:
+                    s1.metric("2s10s", f"{sp['2s10s']:+d} bps",
+                              help="10Y minus 2Y. Negative = inverted.")
+                if "3m10y" in sp:
+                    s2.metric("3m10y", f"{sp['3m10y']:+d} bps",
+                              help="10Y minus 3-month. The Fed's preferred recession gauge.")
+        else:
+            st.info("Yield-curve data temporarily unavailable (Treasury feed unreachable).")
+
+    st.divider()
+    st.caption("Use the sidebar to navigate: Trading Hub · Markets · Research · My Portfolios. "
+               "Data is delayed/real-time from public sources and is for information only.")
 
 # ========================================
 # TRADING HUB
 # ========================================
 
-if selected == "Trading Hub":
+elif selected == "Trading Hub":
     st.header("Trading Hub - Multi-Ticker Analysis")
     
     # Market Overview
@@ -4763,6 +5143,56 @@ elif selected == "Macro Dashboard":
         
     except Exception as e:
         st.warning("Macro data unavailable")
+
+    # ===== Rates, Curve & Fed (added) =====
+    st.divider()
+    st.subheader("Rates, Yield Curve & the Fed")
+
+    msnap = home_macro_snapshot()
+    if msnap:
+        rorder = [k for k in ["13W TBill", "2Y", "5Y", "10Y", "30Y", "VIX", "DXY"] if k in msnap]
+        if rorder:
+            rc = st.columns(len(rorder))
+            for i, k in enumerate(rorder):
+                v = msnap[k]["value"]; ch = msnap[k].get("change")
+                is_rate = k in ("13W TBill", "2Y", "5Y", "10Y", "30Y")
+                rc[i].metric(k, f"{v:.2f}%" if is_rate else f"{v:,.2f}",
+                             (f"{ch:+.02f}" + ("pp" if is_rate else "")) if ch is not None else None,
+                             delta_color="inverse" if k == "VIX" else "normal")
+
+    mc_left, mc_right = st.columns([1, 1])
+    with mc_left:
+        st.markdown("**Treasury Yield Curve**")
+        yc = home_yield_curve()
+        fig = home_yield_curve_figure(yc)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True)
+            sp = home_curve_spreads(yc)
+            if sp:
+                cc1, cc2 = st.columns(2)
+                if "2s10s" in sp:
+                    cc1.metric("2s10s spread", f"{sp['2s10s']:+d} bps", help="10Y minus 2Y. Negative = inverted.")
+                if "3m10y" in sp:
+                    cc2.metric("3m10y spread", f"{sp['3m10y']:+d} bps", help="10Y minus 3-month T-bill.")
+        else:
+            st.info("Yield-curve data temporarily unavailable (Treasury feed unreachable).")
+
+    with mc_right:
+        st.markdown("**Fed: implied next move** <span style='color:#8a93a3;font-size:.72rem'>(derived from Fed Funds futures)</span>", unsafe_allow_html=True)
+        fed = home_fed_probabilities()
+        if fed:
+            fc1, fc2, fc3 = st.columns(3)
+            fc1.metric("Cut", f"{fed['p_cut']}%")
+            fc2.metric("Hold", f"{fed['p_hold']}%")
+            fc3.metric("Hike", f"{fed['p_hike']}%")
+            st.caption(f"Front Fed Funds future implies ~{fed['implied_rate']:.2f}% average effective rate vs an "
+                       f"assumed ~{fed['target_mid']:.2f}% target midpoint ({fed['move_bps']:+.0f} bps of expected drift). "
+                       "This is our own derivation from the futures curve, not CME FedWatch's official published probability. "
+                       "It reflects the front contract only; for a specific meeting date the contract-month weighting matters.")
+            st.markdown("[CME FedWatch (official)](https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html) · "
+                        "[Treasury yield curve](https://www.ustreasuryyieldcurve.com/)")
+        else:
+            st.info("Fed-futures data temporarily unavailable.")
 
 st.divider()
 st.caption("DJR Trading System - Full Trading System with Persistent Storage")
