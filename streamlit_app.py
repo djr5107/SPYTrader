@@ -5981,6 +5981,240 @@ def stock_peer_comparison(tickers):
     return pd.DataFrame(rows).set_index("Metric")
 
 
+# ===== BLS trend charts (added v16) =====
+@st.cache_data(ttl=21600, show_spinner=False)
+def bls_fetch_history(series_ids, years_back=11):
+    """Fetch a longer history for trend charts. Cached separately (longer
+    lookback) from the latest-point board fetch."""
+    end_year = datetime.now().year
+    start_year = end_year - years_back
+    return bls_fetch_series(tuple(series_ids), start_year=start_year, end_year=end_year)
+
+def _bls_row_date(r):
+    return pd.Timestamp(year=r["year"], month=r["month"], day=1)
+
+def bls_yoy_full_series(rows):
+    """YoY % change at every month that has a same-month year-ago comparison.
+    Returns a list of (Timestamp, pct)."""
+    by_key = {(r["year"], r["month"]): r["value"] for r in rows}
+    out = []
+    for r in rows:
+        prior = by_key.get((r["year"] - 1, r["month"]))
+        if prior and prior != 0:
+            out.append((_bls_row_date(r), (r["value"] / prior - 1) * 100))
+    return out
+
+def bls_level_full_series(rows):
+    return [(_bls_row_date(r), r["value"]) for r in rows]
+
+def bls_mom_change_series(rows, scale=1000):
+    out = []
+    for i in range(1, len(rows)):
+        out.append((_bls_row_date(rows[i]), (rows[i]["value"] - rows[i-1]["value"]) * scale))
+    return out
+
+def _trim_to_window(series, months_back):
+    if not series or months_back is None:
+        return series
+    cutoff = series[-1][0] - pd.DateOffset(months=months_back)
+    return [(d, v) for d, v in series if d >= cutoff]
+
+def bls_inflation_trend_figure(raw, months_back=60):
+    """CPI / Core CPI / PPI YoY overlaid on one chart."""
+    cpi = _trim_to_window(bls_yoy_full_series(raw.get("CUUR0000SA0", [])), months_back)
+    core = _trim_to_window(bls_yoy_full_series(raw.get("CUUR0000SA0L1E", [])), months_back)
+    ppi = _trim_to_window(bls_yoy_full_series(raw.get("WPSFD4", [])), months_back)
+    fig = go.Figure()
+    any_trace = False
+    for series, name, color in [(cpi, "CPI (YoY)", "#2dd4bf"), (core, "Core CPI (YoY)", "#f59e0b"), (ppi, "PPI (YoY)", "#a78bfa")]:
+        if series:
+            any_trace = True
+            xs = [d for d, v in series]; ys = [v for d, v in series]
+            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=name, line=dict(width=2, color=color)))
+    if not any_trace:
+        return None
+    fig.add_hline(y=2.0, line_dash="dot", line_color="#6b7280", annotation_text="Fed 2% target", annotation_position="bottom right")
+    fig.update_layout(height=360, margin=dict(l=10, r=10, t=20, b=10),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="#c9d4e0"), legend=dict(orientation="h", y=1.1, x=0), hovermode="x unified")
+    fig.update_yaxes(title_text="YoY % change", gridcolor="rgba(120,130,140,0.12)")
+    fig.update_xaxes(gridcolor="rgba(120,130,140,0.12)")
+    return fig
+
+def bls_labor_trend_figure(raw, months_back=60):
+    """Unemployment rate (left axis) + JOLTS openings level (right axis)."""
+    unemp = _trim_to_window(bls_level_full_series(raw.get("LNS14000000", [])), months_back)
+    jolts = _trim_to_window(bls_level_full_series(raw.get("JTS000000000000000JOL", [])), months_back)
+    if not unemp and not jolts:
+        return None
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    if unemp:
+        fig.add_trace(go.Scatter(x=[d for d,v in unemp], y=[v for d,v in unemp], mode="lines",
+                                 name="Unemployment Rate (%)", line=dict(width=2, color="#2dd4bf")), secondary_y=False)
+    if jolts:
+        fig.add_trace(go.Scatter(x=[d for d,v in jolts], y=[v*1000 for d,v in jolts], mode="lines",
+                                 name="JOLTS Openings", line=dict(width=2, color="#f59e0b", dash="dot")), secondary_y=True)
+    fig.update_layout(height=360, margin=dict(l=10, r=10, t=20, b=10),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="#c9d4e0"), legend=dict(orientation="h", y=1.1, x=0), hovermode="x unified")
+    fig.update_yaxes(title_text="Unemployment Rate (%)", gridcolor="rgba(120,130,140,0.12)", secondary_y=False)
+    fig.update_yaxes(title_text="Job Openings", secondary_y=True)
+    fig.update_xaxes(gridcolor="rgba(120,130,140,0.12)")
+    return fig
+
+def bls_payrolls_trend_figure(raw, months_back=36):
+    """Monthly nonfarm payroll change, bar chart, color-coded pos/neg."""
+    series = _trim_to_window(bls_mom_change_series(raw.get("CES0000000001", [])), months_back)
+    if not series:
+        return None
+    xs = [d for d, v in series]; ys = [v for d, v in series]
+    colors = ["#22c55e" if v >= 0 else "#ef4444" for v in ys]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=xs, y=ys, marker_color=colors, name="Jobs added"))
+    fig.add_hline(y=0, line_color="#6b7280")
+    fig.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="#c9d4e0"), showlegend=False)
+    fig.update_yaxes(title_text="Jobs added (monthly)", gridcolor="rgba(120,130,140,0.12)")
+    fig.update_xaxes(gridcolor="rgba(120,130,140,0.12)")
+    return fig
+
+def bls_wages_trend_figure(raw, months_back=60):
+    series = _trim_to_window(bls_yoy_full_series(raw.get("CES0500000003", [])), months_back)
+    if not series:
+        return None
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=[d for d,v in series], y=[v for d,v in series], mode="lines",
+                             name="Avg Hourly Earnings (YoY)", line=dict(width=2, color="#2dd4bf")))
+    fig.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      font=dict(color="#c9d4e0"), showlegend=False, hovermode="x unified")
+    fig.update_yaxes(title_text="YoY % change", gridcolor="rgba(120,130,140,0.12)")
+    fig.update_xaxes(gridcolor="rgba(120,130,140,0.12)")
+    return fig
+
+
+# ===== Actual NAV/drift + mandate alerts (added v16) =====
+@st.cache_data(ttl=300, show_spinner=False)
+def ai_nav_shares_and_weights(holdings_key):
+    """holdings_key: tuple of (ticker, target_weight) for CURRENT holdings with
+    weight > 0 (same convention as ai_equity_curve's cache key, so it busts
+    correctly when Manage-tab weights change).
+
+    Returns a dict with: shares_post_rebal, cash_residual, pv_at_rebalance,
+    price_now, value_now, nav_now, weight_now (actual % of NAV per ticker),
+    total_return_pct (true return since 2/10), asof."""
+    orig = {tk: w for tk, nm, ti, w in AI_PORTFOLIO_ORIGINAL}
+    cur = dict(holdings_key)
+    notional = AI_PORTFOLIO_NOTIONAL
+
+    # Step 1: shares bought 2/10 at the ORIGINAL model weights.
+    px0 = ai_prices_on_date(tuple(orig.keys()), AI_INCEPTION_DATE)
+    shares0 = {}
+    for tk, w in orig.items():
+        p = px0.get(tk)
+        shares0[tk] = int((notional * w / 100.0) // p) if (p and p > 0) else 0
+
+    # Step 2: value those ORIGINAL shares at 6/1 prices — this is the actual
+    # portfolio value the rebalance traded from (not a fresh $100k).
+    all_tk_reb = sorted(set(orig) | set(cur))
+    px1 = ai_prices_on_date(tuple(all_tk_reb), AI_REBALANCE_DATE)
+    pv_at_rebal = sum(shares0.get(tk, 0) * (px1.get(tk) or 0) for tk in orig)
+    if pv_at_rebal <= 0:
+        pv_at_rebal = notional  # fallback if price data is unavailable
+
+    # Step 3: re-buy to the CURRENT target weights using the actual 6/1 value.
+    shares_post = {}
+    invested_at_rebal = 0.0
+    for tk, w in cur.items():
+        p = px1.get(tk)
+        sh = int((pv_at_rebal * w / 100.0) // p) if (p and p > 0) else 0
+        shares_post[tk] = sh
+        invested_at_rebal += sh * (p or 0)
+    cash_residual = pv_at_rebal - invested_at_rebal   # assumed non-interest-bearing
+
+    # Step 4: value TODAY at live prices — these shares are held flat from 6/1,
+    # so today's weight reflects real market drift, not the target weight.
+    today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    px_now = ai_prices_on_date(tuple(shares_post.keys()), today_str)
+    value_now = {}
+    for tk, sh in shares_post.items():
+        p = px_now.get(tk)
+        value_now[tk] = (sh * p) if p else None
+
+    known_val = sum(v for v in value_now.values() if v is not None)
+    nav_now = cash_residual + known_val
+
+    weight_now = {}
+    for tk, v in value_now.items():
+        weight_now[tk] = (v / nav_now * 100.0) if (v is not None and nav_now > 0) else None
+
+    total_return_pct = (nav_now / notional - 1) * 100.0 if notional > 0 else None
+
+    return {"shares_post_rebal": shares_post, "cash_residual": cash_residual,
+            "pv_at_rebalance": pv_at_rebal, "price_now": px_now, "value_now": value_now,
+            "nav_now": nav_now, "weight_now": weight_now,
+            "total_return_pct": total_return_pct, "cash_pct": (cash_residual/nav_now*100 if nav_now else None),
+            "asof": today_str}
+
+# ---------- Mandate guardrails ----------
+AI_MANDATE_DEFAULTS = {
+    "max_single_name_pct": 10.0,   # hard cap: no position should exceed this % of NAV
+    "max_drift_pp": 2.5,           # flag if |current - target| exceeds this many points
+    "tier_band_pp": 5.0,           # tier-level actual vs target tolerance
+    "max_cash_pct": 15.0,          # flag if too much of the book sits in un-invested cash
+}
+
+def ai_mandate_alerts(nav, holdings, thresholds=None):
+    """Check the actual (drift) NAV weights against configurable mandate
+    guardrails. Returns a list of {level:'error'|'warning', message:str}."""
+    th = {**AI_MANDATE_DEFAULTS, **(thresholds or {})}
+    weight_now = nav.get("weight_now", {})
+    targets = {h["ticker"]: (h.get("target_weight") or 0) for h in holdings}
+    tiers = {h["ticker"]: h.get("tier") for h in holdings}
+    alerts = []
+
+    for tk, w in weight_now.items():
+        if w is None:
+            continue
+        if w > th["max_single_name_pct"]:
+            alerts.append({"level": "error",
+                           "message": f"**{tk}** is {w:.1f}% of NAV — exceeds the {th['max_single_name_pct']:.0f}% single-name cap."})
+
+    for tk, w in weight_now.items():
+        if w is None:
+            continue
+        t = targets.get(tk, 0)
+        drift = w - t
+        if abs(drift) > th["max_drift_pp"]:
+            direction = "above" if drift > 0 else "below"
+            action = "consider trimming back to target" if drift > 0 else "consider adding back to target"
+            alerts.append({"level": "warning",
+                           "message": f"**{tk}** has drifted {abs(drift):.1f}pp {direction} its {t:.1f}% target (now {w:.1f}%) — {action}."})
+
+    tier_now, tier_target = {}, {}
+    for tk, w in weight_now.items():
+        ti = tiers.get(tk)
+        if ti and w is not None:
+            tier_now[ti] = tier_now.get(ti, 0) + w
+    for tk, t in targets.items():
+        ti = tiers.get(tk)
+        if ti:
+            tier_target[ti] = tier_target.get(ti, 0) + t
+    for ti in tier_now:
+        drift = tier_now[ti] - tier_target.get(ti, 0)
+        if abs(drift) > th["tier_band_pp"]:
+            alerts.append({"level": "warning",
+                           "message": f"**{ti}** tier has drifted to {tier_now[ti]:.1f}% vs a ~{tier_target.get(ti,0):.1f}% target ({drift:+.1f}pp)."})
+
+    cash_pct = nav.get("cash_pct")
+    if cash_pct is not None and cash_pct > th["max_cash_pct"]:
+        alerts.append({"level": "warning",
+                       "message": f"Residual cash is {cash_pct:.1f}% of NAV — above the {th['max_cash_pct']:.0f}% guideline; consider redeploying."})
+
+    return alerts
+
+
 # ========================================
 # HOME — Market Dashboard (landing page)
 # ========================================
@@ -8012,30 +8246,71 @@ elif selected == "AI Strategy":
         st.subheader("Model Portfolio: Live Holdings")
         with st.spinner("Fetching live prices..."):
             strat_ret, bench_ret, per = ai_compute_performance(holdings, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK)
+        hk = tuple((h['ticker'], h.get('target_weight') or 0) for h in holdings if (h.get('target_weight') or 0) > 0)
+        with st.spinner("Computing actual position drift..."):
+            nav = ai_nav_shares_and_weights(hk)
 
-        # headline metrics
+        # headline metrics — ACTUAL share-based return (fixes "sticking with model weights")
         mc1, mc2, mc3, mc4 = st.columns(4)
         mc1.metric("Holdings", f"{len(holdings)}")
         tw = sum(h.get('target_weight') or 0 for h in holdings)
-        mc2.metric("Invested Weight", f"{tw:.0f}%", help="Sum of target weights. Remainder is cash.")
-        mc3.metric("Strategy (since inception)", f"{strat_ret:+.1f}%" if strat_ret is not None else "n/a",
-                   help="Target-weighted price change of holdings since 2026-02-10.")
-        delta_v = (strat_ret - bench_ret) if (strat_ret is not None and bench_ret is not None) else None
+        mc2.metric("Invested Weight (target)", f"{tw:.0f}%", help="Sum of target weights. Remainder is cash.")
+        actual_ret = nav.get("total_return_pct")
+        mc3.metric("Strategy (actual, since inception)", f"{actual_ret:+.1f}%" if actual_ret is not None else "n/a",
+                   help="Share-based return: shares bought 2/10/2026 at original weights, revalued and re-bought at the "
+                        "6/1/2026 rebalance, held flat since. Reflects what the portfolio actually earned, not a "
+                        "continuously-rebalanced-to-target approximation.")
+        delta_v = (actual_ret - bench_ret) if (actual_ret is not None and bench_ret is not None) else None
         mc4.metric("NDX (benchmark)", f"{bench_ret:+.1f}%" if bench_ret is not None else "n/a",
                    f"{delta_v:+.1f}% active" if delta_v is not None else None)
-        st.caption(f"Inception date: **{AI_STRATEGY_INCEPTION}** · Benchmark: Nasdaq-100 (NDX) · Showing current holdings only (target weight > 0).")
+        st.caption(f"Inception date: **{AI_STRATEGY_INCEPTION}** · Rebalanced **{AI_REBALANCE_DATE}** · Benchmark: Nasdaq-100 (NDX) · "
+                   f"Showing current holdings only (target weight > 0). NAV as of {nav.get('asof','today')}: ${nav.get('nav_now',0):,.0f} "
+                   f"(cash ${nav.get('cash_residual',0):,.0f}, {nav.get('cash_pct',0):.1f}%).")
 
-        # tier allocation summary
-        st.markdown("##### Tier Allocation vs. Target")
-        tier_now = {}
+        # tier allocation summary — now shows ACTUAL drifted tier weight vs target
+        st.markdown("##### Tier Allocation: Actual (Drift) vs Target")
+        weight_now = nav.get("weight_now", {})
+        tier_actual = {}
         for h in holdings:
-            tier_now[h['tier']] = tier_now.get(h['tier'], 0) + (h.get('target_weight') or 0)
+            w = weight_now.get(h['ticker'])
+            if w is not None:
+                tier_actual[h['tier']] = tier_actual.get(h['tier'], 0) + w
         tcols = st.columns(len(AI_TIER_TARGETS))
         for i, (tier, target) in enumerate(AI_TIER_TARGETS.items()):
-            cur = tier_now.get(tier, 0)
             if tier == "CASH":
-                cur = max(0, 100 - tw)
-            tcols[i].metric(tier.title(), f"{cur:.0f}%", f"target {target}%", delta_color="off")
+                cur = nav.get("cash_pct", max(0, 100 - tw))
+            else:
+                cur = tier_actual.get(tier, 0)
+            tcols[i].metric(tier.title(), f"{cur:.1f}%", f"target {target}%", delta_color="off")
+        st.caption("Actual reflects real price drift since the 6/1 rebalance (shares held flat, revalued at live prices) — not a re-derivation of target weights.")
+
+        # ----- Mandate Alerts -----
+        st.markdown("##### Mandate Alerts")
+        with st.expander("⚙️ Adjust mandate thresholds", expanded=False):
+            th1, th2, th3, th4 = st.columns(4)
+            with th1:
+                _max_single = st.number_input("Max single-name %", min_value=1.0, max_value=30.0,
+                                              value=AI_MANDATE_DEFAULTS["max_single_name_pct"], step=0.5, key="mandate_max_single")
+            with th2:
+                _max_drift = st.number_input("Max drift (pp)", min_value=0.5, max_value=10.0,
+                                             value=AI_MANDATE_DEFAULTS["max_drift_pp"], step=0.5, key="mandate_max_drift")
+            with th3:
+                _tier_band = st.number_input("Tier band (pp)", min_value=1.0, max_value=15.0,
+                                             value=AI_MANDATE_DEFAULTS["tier_band_pp"], step=0.5, key="mandate_tier_band")
+            with th4:
+                _max_cash = st.number_input("Max cash %", min_value=1.0, max_value=30.0,
+                                            value=AI_MANDATE_DEFAULTS["max_cash_pct"], step=0.5, key="mandate_max_cash")
+        _mandate_th = {"max_single_name_pct": _max_single, "max_drift_pp": _max_drift,
+                       "tier_band_pp": _tier_band, "max_cash_pct": _max_cash}
+        alerts = ai_mandate_alerts(nav, holdings, _mandate_th)
+        if alerts:
+            for a in alerts:
+                if a["level"] == "error":
+                    st.error(a["message"])
+                else:
+                    st.warning(a["message"])
+        else:
+            st.success("✅ Portfolio is within all mandate guidelines — no single-name, tier, drift, or cash breaches.")
 
         # ----- entry-target view toggle -----
         st.markdown("##### Holdings")
@@ -8048,10 +8323,17 @@ elif selected == "AI Strategy":
             df['Price'] = df['price_now'].apply(lambda x: f"${x:,.2f}" if x is not None else "n/a")
             df['Since Incept'] = df['ret_pct'].apply(lambda x: f"{x:+.1f}%" if x is not None else "n/a")
             df['Contribution'] = df['contribution'].apply(lambda x: f"{x:+.2f}%" if x is not None else "n/a")
-            df['Weight'] = df['target_weight'].apply(lambda x: f"{x:.0f}%" if x is not None else "")
+            df['Target Wt'] = df['target_weight'].apply(lambda x: f"{x:.1f}%" if x is not None else "")
+            df['Current Wt'] = df['ticker'].apply(lambda tk: f"{weight_now.get(tk):.1f}%" if weight_now.get(tk) is not None else "n/a")
+            def _drift_fmt(row):
+                w = weight_now.get(row['ticker']); t = row.get('target_weight') or 0
+                if w is None: return "n/a"
+                d = w - t
+                flag = " 🔴" if abs(d) > _max_drift else (" 🟡" if abs(d) > _max_drift/2 else "")
+                return f"{d:+.1f}pp{flag}"
+            df['Drift'] = df.apply(_drift_fmt, axis=1)
             df['Score'] = df['score'].apply(lambda x: f"{x:.1f}" if x is not None else "")
 
-            # entry-target columns
             def _fmt_price(v):
                 return f"${v:,.2f}" if v is not None else "—"
             zones, opt, sec, ceil = [], [], [], []
@@ -8071,12 +8353,14 @@ elif selected == "AI Strategy":
             df = df.sort_values(['_ord', 'target_weight'], ascending=[True, False])
 
             if show_entries:
-                cols = ['tier', 'ticker', 'name', 'Score', 'Weight', 'Price', 'Zone',
-                        'Optimal', 'Secondary', 'Do-Not-Exceed', 'Since Incept', 'Contribution']
+                cols = ['tier', 'ticker', 'name', 'Score', 'Target Wt', 'Current Wt', 'Drift', 'Price', 'Zone',
+                        'Optimal', 'Secondary', 'Do-Not-Exceed', 'Since Incept']
             else:
-                cols = ['tier', 'ticker', 'name', 'Score', 'Weight', 'Price', 'Since Incept', 'Contribution']
+                cols = ['tier', 'ticker', 'name', 'Score', 'Target Wt', 'Current Wt', 'Drift', 'Price', 'Since Incept', 'Contribution']
             show = df[cols].rename(columns={'tier': 'Tier', 'ticker': 'Ticker', 'name': 'Name'})
             st.dataframe(show, use_container_width=True, hide_index=True, height=560)
+            st.caption(f"Current Wt / Drift reflect actual share-based drift since the {AI_REBALANCE_DATE} rebalance (live prices), "
+                       f"not a re-derivation of the target weight. 🔴 = drift exceeds {_max_drift:.1f}pp · 🟡 = over half that threshold.")
             if show_entries:
                 st.caption("Zone: 🟢 at/below optimal or in buy zone · 🟡 below the do-not-exceed ceiling · 🔴 above ceiling · "
                            "🔄 RE-RATE/Stale = a recent earnings or guidance event (or a gap >12% past the ceiling) has made the static levels obsolete — re-derive off new guidance before acting. "
@@ -8086,8 +8370,6 @@ elif selected == "AI Strategy":
                 if _reval:
                     st.warning("🔄 Targets need refreshing after a recent re-rating event: " + ", ".join(_reval)
                                + ". These names reported or gapped on news; re-derive their optimal/secondary/ceiling off the updated guidance.")
-            else:
-                st.caption("Since Incept = each name's price change since 2026-02-10. Contribution = target weight × that return.")
 
             # per-holding thesis expander
             with st.expander("📝 View conviction thesis per holding"):
@@ -8109,6 +8391,25 @@ elif selected == "AI Strategy":
         with st.spinner("Computing performance..."):
             strat_ret, bench_ret, per = ai_compute_performance(holdings, AI_STRATEGY_INCEPTION, AI_STRATEGY_BENCHMARK)
 
+        # ===== Actual Portfolio Return (share-based, accounts for the 6/1 rebalance) =====
+        hk = tuple((h['ticker'], h.get('target_weight') or 0) for h in holdings if (h.get('target_weight') or 0) > 0)
+        with st.spinner("Computing actual share-based return..."):
+            nav = ai_nav_shares_and_weights(hk)
+        st.markdown("##### Actual Portfolio Return (share-based)")
+        st.success(
+            f"**{nav.get('total_return_pct', 0):+.2f}%** since {AI_STRATEGY_INCEPTION} — NAV **${nav.get('nav_now', 0):,.0f}** "
+            f"(cash ${nav.get('cash_residual', 0):,.0f}, {nav.get('cash_pct', 0):.1f}%). "
+            f"This tracks actual share counts through the {AI_REBALANCE_DATE} rebalance and current live prices — "
+            f"the number to trust for \"how has this portfolio actually done.\""
+        )
+        st.caption("Methodology: shares bought 2/10/2026 at original model weights → revalued at 6/1/2026 close → "
+                   "re-bought at 6/1 to current target weights using that actual (not a fresh $100k) value → held flat "
+                   "since, drifting with live prices. This fixes the prior approximation below, which continuously "
+                   "re-weights every holding to its *current* target for the whole period — that silently gives sold "
+                   "names (BABA, HPE) zero credit for the P&L they actually generated, and gives new adds (PANW, ARM, SO) "
+                   "credit for price moves before the portfolio owned them.")
+        st.divider()
+        st.markdown("##### Model Breakdown (continuously target-weighted — illustrative, see note above)")
         pc1, pc2, pc3 = st.columns(3)
         pc1.metric("Strategy (Model)", f"{strat_ret:+.2f}%" if strat_ret is not None else "n/a")
         pc2.metric("Nasdaq-100", f"{bench_ret:+.2f}%" if bench_ret is not None else "n/a")
@@ -8116,7 +8417,9 @@ elif selected == "AI Strategy":
         pc3.metric("Active Return", f"{active:+.2f}%" if active is not None else "n/a",
                    help="Strategy minus benchmark. Positive = outperforming NDX.")
 
-        st.info("This is **model** performance: target weights × each holding's actual price change since inception. "
+        st.info("This breakdown below is **model** performance: current target weights × each holding's actual price change since inception, "
+                "continuously applied for the whole period (a simplification used for per-name contribution/attribution below — it does not "
+                "reflect the actual 6/1 rebalance timing the way the Actual Portfolio Return above does). "
                 "It reflects how the strategy's allocation has performed, not your exact brokerage P&L (which would need your real share counts and fills).")
 
         # contribution chart
@@ -9068,6 +9371,40 @@ elif selected == "Macro Dashboard":
                              help=f"As of {eco[k]['asof']}")
     else:
         st.info("BLS economic data temporarily unavailable.")
+
+    st.divider()
+    st.markdown("##### Trend Charts")
+    st.caption("Historical trends for the metrics above, so direction and turning points are visible, not just the latest print.")
+    trend_lookback = st.select_slider("Lookback", options=["1yr", "3yr", "5yr", "10yr"], value="5yr", key="bls_trend_lookback")
+    lookback_months = {"1yr": 12, "3yr": 36, "5yr": 60, "10yr": 120}[trend_lookback]
+    with st.spinner("Fetching BLS history..."):
+        _hist_ids = [v[0] for v in BLS_SERIES.values()]
+        _hist_raw = bls_fetch_history(tuple(_hist_ids), years_back=min(11, lookback_months // 12 + 1))
+    trend_tabs = st.tabs(["Inflation", "Labor Market", "Payrolls", "Wages"])
+    with trend_tabs[0]:
+        fig_i = bls_inflation_trend_figure(_hist_raw, lookback_months)
+        if fig_i is not None:
+            st.plotly_chart(fig_i, use_container_width=True)
+        else:
+            st.info("Inflation trend data unavailable.")
+    with trend_tabs[1]:
+        fig_l = bls_labor_trend_figure(_hist_raw, lookback_months)
+        if fig_l is not None:
+            st.plotly_chart(fig_l, use_container_width=True)
+        else:
+            st.info("Labor market trend data unavailable.")
+    with trend_tabs[2]:
+        fig_p = bls_payrolls_trend_figure(_hist_raw, lookback_months)
+        if fig_p is not None:
+            st.plotly_chart(fig_p, use_container_width=True)
+        else:
+            st.info("Payrolls trend data unavailable.")
+    with trend_tabs[3]:
+        fig_w = bls_wages_trend_figure(_hist_raw, lookback_months)
+        if fig_w is not None:
+            st.plotly_chart(fig_w, use_container_width=True)
+        else:
+            st.info("Wages trend data unavailable.")
 
     # ===== Sentiment =====
     st.divider()
