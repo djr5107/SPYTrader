@@ -5665,6 +5665,322 @@ def treasury_spread_figure(df, spread1, spread2=None, start_date=None, end_date=
     fig.update_xaxes(title_text="", gridcolor="rgba(120,130,140,0.12)")
     return fig
 
+# ===== BLS labor/inflation data module (added v15) =====
+BLS_SERIES = {
+    "CPI (YoY)":               ("CUUR0000SA0", "yoy_pct"),
+    "Core CPI (YoY)":          ("CUUR0000SA0L1E", "yoy_pct"),
+    "PPI Final Demand (YoY)":  ("WPSFD4", "yoy_pct"),
+    "Nonfarm Payrolls (MoM)":  ("CES0000000001", "mom_payrolls"),
+    "Unemployment Rate":       ("LNS14000000", "level_pct_mom"),
+    "Job Openings (JOLTS)":    ("JTS000000000000000JOL", "mom_level_x1000"),
+    "Avg Hourly Earnings (YoY)": ("CES0500000003", "yoy_pct"),
+}
+
+def _bls_key():
+    """Read a BLS API key from Streamlit secrets first, else a session-pasted key.
+    Returns '' if none configured — the API still works without one, just at
+    the lower unregistered rate limit (25 queries/day, 10-year lookback)."""
+    try:
+        k = st.secrets.get("BLS_API_KEY", "")
+        if k:
+            return k
+    except Exception:
+        pass
+    return st.session_state.get("user_bls_key", "")
+
+@st.cache_data(ttl=21600, show_spinner=False)   # 6 hours — BLS series update monthly
+def bls_fetch_series(series_ids, start_year=None, end_year=None, _key=""):
+    """POST to the BLS Public API v2 for a batch of series. Returns
+    {series_id: [{'year':int,'month':int,'value':float}, ...]} sorted oldest→newest,
+    monthly observations only (annual-average M13 rows are dropped)."""
+    key = _key or _bls_key()
+    end_year = end_year or datetime.now().year
+    start_year = start_year or (end_year - 3)
+    try:
+        body = {"seriesid": list(series_ids), "startyear": str(start_year), "endyear": str(end_year)}
+        if key:
+            body["registrationkey"] = key
+        data = json.dumps(body).encode("utf-8")
+        req = _urlreq.Request("https://api.bls.gov/publicAPI/v2/timeseries/data/",
+                              data=data, headers={"Content-Type": "application/json"})
+        with _urlreq.urlopen(req, timeout=20) as r:
+            js = json.loads(r.read())
+        out = {}
+        if js.get("status") not in ("REQUEST_SUCCEEDED",):
+            return out
+        for s in js.get("Results", {}).get("series", []):
+            sid = s.get("seriesID")
+            rows = []
+            for d in s.get("data", []):
+                per = d.get("period", "")
+                if not (per.startswith("M") and per != "M13"):
+                    continue
+                try:
+                    rows.append({"year": int(d["year"]), "month": int(per[1:]), "value": float(d["value"])})
+                except Exception:
+                    pass
+            rows.sort(key=lambda r: (r["year"], r["month"]))
+            out[sid] = rows
+        return out
+    except Exception:
+        return {}
+
+def _bls_yoy(rows):
+    """Year-over-year % change: latest month vs the same month one year prior."""
+    if len(rows) < 13:
+        return None, None
+    latest = rows[-1]
+    yr_ago = next((r for r in rows if r["year"] == latest["year"] - 1 and r["month"] == latest["month"]), None)
+    if not yr_ago or yr_ago["value"] == 0:
+        return None, None
+    pct = (latest["value"] / yr_ago["value"] - 1) * 100
+    return pct, f"{latest['year']}-{latest['month']:02d}"
+
+def _bls_latest_prev(rows):
+    if not rows:
+        return None, None, None
+    latest = rows[-1]
+    prev = rows[-2] if len(rows) > 1 else None
+    return latest["value"], (prev["value"] if prev else None), f"{latest['year']}-{latest['month']:02d}"
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def bls_labor_inflation_board():
+    """Assemble the labor + inflation board entirely from BLS. Same output
+    shape as the old fred_macro_board() so the UI rendering code barely changes."""
+    ids = tuple(v[0] for v in BLS_SERIES.values())
+    raw = bls_fetch_series(ids)
+    board = {}
+    for label, (sid, kind) in BLS_SERIES.items():
+        rows = raw.get(sid, [])
+        if not rows:
+            continue
+        if kind == "yoy_pct":
+            pct, asof = _bls_yoy(rows)
+            if pct is not None:
+                board[label] = {"value": f"{pct:.1f}%", "asof": asof, "sub": "year-over-year"}
+        elif kind == "mom_payrolls":
+            cur, prev, asof = _bls_latest_prev(rows)
+            if cur is not None:
+                val_txt = f"{(cur - prev) * 1000:+,.0f}" if prev is not None else f"{cur * 1000:,.0f}"
+                board[label] = {"value": val_txt, "asof": asof, "sub": "jobs added, monthly"}
+        elif kind == "mom_level_x1000":
+            cur, prev, asof = _bls_latest_prev(rows)
+            if cur is not None:
+                sub = f"{(cur - prev) * 1000:+,.0f} m/m" if prev is not None else "monthly"
+                board[label] = {"value": f"{cur * 1000:,.0f}", "asof": asof, "sub": sub}
+        elif kind == "level_pct_mom":
+            cur, prev, asof = _bls_latest_prev(rows)
+            if cur is not None:
+                sub = f"{(cur - prev):+.1f}pp" if prev is not None else "monthly"
+                board[label] = {"value": f"{cur:.1f}%", "asof": asof, "sub": sub}
+    return board
+
+
+# ===== Stock research module: overview/financials/ratios/peers/links (added v15) =====
+def _fmt_num(v, kind="num", decimals=2):
+    """Format a numeric .info value for display, or 'n/a' if missing."""
+    if v is None:
+        return "n/a"
+    try:
+        if kind == "pct":
+            return f"{v*100:.{decimals}f}%"
+        if kind == "pct_raw":       # already in percent units
+            return f"{v:.{decimals}f}%"
+        if kind == "usd":
+            return f"${v:,.{decimals}f}"
+        if kind == "big":
+            av = abs(v)
+            if av >= 1e12: return f"${v/1e12:.2f}T"
+            if av >= 1e9:  return f"${v/1e9:.2f}B"
+            if av >= 1e6:  return f"${v/1e6:.1f}M"
+            return f"${v:,.0f}"
+        if kind == "int":
+            return f"{v:,.0f}"
+        return f"{v:.{decimals}f}"
+    except Exception:
+        return "n/a"
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def stock_overview_info(ticker):
+    """Raw .info dict for a ticker, cached. Returns {} on failure."""
+    try:
+        return yf.Ticker(ticker).info or {}
+    except Exception:
+        return {}
+
+def stock_overview_grid(info):
+    """Organize .info into a finviz-style categorized grid.
+    Returns dict of category -> [(label, formatted_value), ...]."""
+    g = info.get
+    grid = {
+        "Company": [
+            ("Sector", g("sector") or "n/a"), ("Industry", g("industry") or "n/a"),
+            ("Country", g("country") or "n/a"), ("Employees", _fmt_num(g("fullTimeEmployees"), "int")),
+        ],
+        "Valuation": [
+            ("Market Cap", _fmt_num(g("marketCap"), "big")), ("Enterprise Value", _fmt_num(g("enterpriseValue"), "big")),
+            ("P/E (trailing)", _fmt_num(g("trailingPE"))), ("P/E (forward)", _fmt_num(g("forwardPE"))),
+            ("PEG Ratio", _fmt_num(g("trailingPegRatio") or g("pegRatio"))),
+            ("P/S (ttm)", _fmt_num(g("priceToSalesTrailing12Months"))), ("P/B", _fmt_num(g("priceToBook"))),
+            ("EV/Revenue", _fmt_num(g("enterpriseToRevenue"))), ("EV/EBITDA", _fmt_num(g("enterpriseToEbitda"))),
+        ],
+        "Profitability": [
+            ("Gross Margin", _fmt_num(g("grossMargins"), "pct")), ("Operating Margin", _fmt_num(g("operatingMargins"), "pct")),
+            ("Net Margin", _fmt_num(g("profitMargins"), "pct")), ("ROA", _fmt_num(g("returnOnAssets"), "pct")),
+            ("ROE", _fmt_num(g("returnOnEquity"), "pct")),
+        ],
+        "Growth": [
+            ("Revenue Growth (YoY)", _fmt_num(g("revenueGrowth"), "pct")),
+            ("Earnings Growth (YoY)", _fmt_num(g("earningsGrowth"), "pct")),
+            ("Qtrly Earnings Growth", _fmt_num(g("earningsQuarterlyGrowth"), "pct")),
+        ],
+        "Per Share": [
+            ("EPS (ttm)", _fmt_num(g("trailingEps"), "usd")), ("EPS (fwd)", _fmt_num(g("forwardEps"), "usd")),
+            ("Book Value/Share", _fmt_num(g("bookValue"), "usd")), ("Cash/Share", _fmt_num(g("totalCashPerShare"), "usd")),
+            ("Revenue/Share", _fmt_num(g("revenuePerShare"), "usd")),
+        ],
+        "Dividends": [
+            ("Div Yield", _fmt_num(g("dividendYield"), "pct_raw") if g("dividendYield") and g("dividendYield") > 1 else _fmt_num(g("dividendYield"), "pct")),
+            ("Div Rate", _fmt_num(g("dividendRate"), "usd")), ("Payout Ratio", _fmt_num(g("payoutRatio"), "pct")),
+            ("5Y Avg Div Yield", _fmt_num(g("fiveYearAvgDividendYield"), "pct_raw")),
+        ],
+        "Trading": [
+            ("52W High", _fmt_num(g("fiftyTwoWeekHigh"), "usd")), ("52W Low", _fmt_num(g("fiftyTwoWeekLow"), "usd")),
+            ("50-Day Avg", _fmt_num(g("fiftyDayAverage"), "usd")), ("200-Day Avg", _fmt_num(g("twoHundredDayAverage"), "usd")),
+            ("Beta", _fmt_num(g("beta"))), ("Avg Volume", _fmt_num(g("averageVolume"), "int")),
+            ("Shares Out.", _fmt_num(g("sharesOutstanding"), "big")), ("Short % of Float", _fmt_num(g("shortPercentOfFloat"), "pct")),
+        ],
+        "Ownership": [
+            ("Insider Held", _fmt_num(g("heldPercentInsiders"), "pct")), ("Institutional Held", _fmt_num(g("heldPercentInstitutions"), "pct")),
+        ],
+        "Analyst": [
+            ("Recommendation", (g("recommendationKey") or "n/a").replace("_", " ").title()),
+            ("Target Mean", _fmt_num(g("targetMeanPrice"), "usd")), ("Target High", _fmt_num(g("targetHighPrice"), "usd")),
+            ("Target Low", _fmt_num(g("targetLowPrice"), "usd")), ("# Analysts", _fmt_num(g("numberOfAnalystOpinions"), "int")),
+        ],
+    }
+    return grid
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def stock_financial_statements(ticker, statement, period):
+    """statement: 'income'|'balance'|'cashflow'; period: 'annual'|'quarterly'.
+    Returns a DataFrame (line items x period-end dates) or empty DataFrame."""
+    try:
+        t = yf.Ticker(ticker)
+        if statement == "income":
+            df = t.quarterly_financials if period == "quarterly" else t.financials
+        elif statement == "balance":
+            df = t.quarterly_balance_sheet if period == "quarterly" else t.balance_sheet
+        else:
+            df = t.quarterly_cashflow if period == "quarterly" else t.cashflow
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+def _find_row(df, candidates):
+    """Find the first matching row (case-insensitive, substring-tolerant) among
+    several possible yfinance label variants, and return its most recent value.
+    yfinance's exact row naming has drifted across versions, so this is
+    deliberately fuzzy rather than requiring an exact key match."""
+    if df is None or df.empty:
+        return None
+    idx_lower = {str(i).lower(): i for i in df.index}
+    for cand in candidates:
+        cl = cand.lower()
+        if cl in idx_lower:
+            try:
+                return float(df.loc[idx_lower[cl]].iloc[0])
+            except Exception:
+                continue
+        for k_low, k_orig in idx_lower.items():
+            if cl in k_low:
+                try:
+                    return float(df.loc[k_orig].iloc[0])
+                except Exception:
+                    continue
+    return None
+
+def stock_compute_ratios(ticker, info, income_df, balance_df, cashflow_df):
+    """Ratios not directly in .info, derived from the financial statements.
+    Every lookup is defensive (returns None -> 'n/a' downstream) since exact
+    yfinance row-label wording varies by version."""
+    revenue = _find_row(income_df, ["Total Revenue", "TotalRevenue"])
+    ebit = _find_row(income_df, ["EBIT", "Operating Income"])
+    interest_exp = _find_row(income_df, ["Interest Expense", "InterestExpense"])
+    net_income = _find_row(income_df, ["Net Income", "NetIncome"])
+
+    cur_assets = _find_row(balance_df, ["Total Current Assets", "Current Assets"])
+    cur_liab = _find_row(balance_df, ["Total Current Liabilities", "Current Liabilities"])
+    inventory = _find_row(balance_df, ["Inventory"])
+    total_debt = _find_row(balance_df, ["Total Debt"])
+    equity = _find_row(balance_df, ["Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity"])
+
+    op_cf = _find_row(cashflow_df, ["Operating Cash Flow", "Total Cash From Operating Activities", "Cash Flow From Continuing Operating Activities"])
+    capex = _find_row(cashflow_df, ["Capital Expenditure", "CapitalExpenditures"])
+
+    ratios = {}
+    if cur_assets and cur_liab:
+        ratios["Current Ratio"] = f"{cur_assets/cur_liab:.2f}"
+    if cur_assets is not None and inventory is not None and cur_liab:
+        ratios["Quick Ratio"] = f"{(cur_assets - inventory)/cur_liab:.2f}"
+    if total_debt is not None and equity:
+        ratios["Debt / Equity"] = f"{total_debt/equity:.2f}"
+    if ebit is not None and interest_exp:
+        try:
+            ratios["Interest Coverage"] = f"{ebit/abs(interest_exp):.1f}x"
+        except Exception:
+            pass
+    if op_cf is not None and capex is not None:
+        fcf = op_cf - abs(capex)
+        ratios["Free Cash Flow"] = _fmt_num(fcf, "big")
+        if revenue:
+            ratios["FCF Margin"] = f"{fcf/revenue*100:.1f}%"
+    if net_income is not None and equity:
+        ratios["ROE (computed)"] = f"{net_income/equity*100:.1f}%"
+    # prefer info's own margins/ROE if statement-derived ones are unavailable
+    if "ROE (computed)" not in ratios and info.get("returnOnEquity") is not None:
+        ratios["ROE (computed)"] = f"{info['returnOnEquity']*100:.1f}%"
+    return ratios
+
+def stock_research_links(ticker):
+    """SEC EDGAR + IR + Yahoo research links, matching the Earnings Monitor pattern."""
+    edgar_full = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={ticker}&type=&dateb=&owner=include&count=20"
+    edgar_10k = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={ticker}&type=10-K&dateb=&owner=include&count=10"
+    yf_estimates = f"https://finance.yahoo.com/quote/{ticker}/analysis"
+    yf_press = f"https://finance.yahoo.com/quote/{ticker}/press-releases"
+    yf_financials = f"https://finance.yahoo.com/quote/{ticker}/financials"
+    ir_search = f"https://www.google.com/search?q={ticker}+investor+relations"
+    return {"edgar_full": edgar_full, "edgar_10k": edgar_10k, "yf_estimates": yf_estimates,
+            "yf_press": yf_press, "yf_financials": yf_financials, "ir_search": ir_search}
+
+PEER_METRICS = [
+    ("Market Cap", "marketCap", "big"), ("P/E (fwd)", "forwardPE", "num"),
+    ("PEG", "trailingPegRatio", "num"), ("P/S", "priceToSalesTrailing12Months", "num"),
+    ("EV/EBITDA", "enterpriseToEbitda", "num"), ("Gross Margin", "grossMargins", "pct"),
+    ("Operating Margin", "operatingMargins", "pct"), ("ROE", "returnOnEquity", "pct"),
+    ("Revenue Growth", "revenueGrowth", "pct"), ("Div Yield", "dividendYield", "pct"),
+    ("Beta", "beta", "num"),
+]
+
+def stock_peer_comparison(tickers):
+    """Build a comparison table: rows = metrics, columns = tickers.
+    Returns a DataFrame, or empty DataFrame if no tickers resolve."""
+    infos = {}
+    for tk in tickers:
+        i = stock_overview_info(tk)
+        if i:
+            infos[tk] = i
+    if not infos:
+        return pd.DataFrame()
+    rows = []
+    for label, field, kind in PEER_METRICS:
+        row = {"Metric": label}
+        for tk, i in infos.items():
+            row[tk] = _fmt_num(i.get(field), kind)
+        rows.append(row)
+    return pd.DataFrame(rows).set_index("Metric")
+
+
 # ========================================
 # HOME — Market Dashboard (landing page)
 # ========================================
@@ -6945,85 +7261,200 @@ elif selected == "Chart Analysis":
     else:
         nm = info.get("name", chosen)
         st.markdown(f"### {chosen} — {nm}")
-        try:
-            t = yf.Ticker(chosen)
-            if period == "Custom" and _cust_start and _cust_end:
-                hist = t.history(start=_cust_start, end=_cust_end, interval="1d")
+
+        research_tabs = st.tabs(["📈 Chart & Technicals", "🏢 Overview", "📊 Financials", "🔍 Peer Comparison", "📄 Research Links"])
+
+        # ===== Tab 1: Chart & Technicals (existing chart/scorecard content) =====
+        with research_tabs[0]:
+            try:
+                t = yf.Ticker(chosen)
+                if period == "Custom" and _cust_start and _cust_end:
+                    hist = t.history(start=_cust_start, end=_cust_end, interval="1d")
+                else:
+                    hist = t.history(period=period, interval="1d")
+
+                if not hist.empty:
+                    df = calculate_technical_indicators(hist)
+
+                    fig = make_subplots(
+                        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+                        row_heights=[0.6, 0.2, 0.2],
+                        subplot_titles=(f'{chosen} Price', 'RSI', 'Volume')
+                    )
+                    fig.add_trace(go.Candlestick(
+                        x=df.index, open=df['Open'], high=df['High'],
+                        low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
+                    for p, color in [(20, 'orange'), (50, 'blue'), (200, 'purple')]:
+                        if f'SMA_{p}' in df.columns:
+                            fig.add_trace(go.Scatter(x=df.index, y=df[f'SMA_{p}'],
+                                         name=f'SMA {p}', line=dict(color=color, width=1)), row=1, col=1)
+                    if 'RSI' in df.columns:
+                        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI',
+                                     line=dict(color='purple', width=1)), row=2, col=1)
+                        fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+                        fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+                    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume',
+                                 marker_color='lightblue'), row=3, col=1)
+                    fig.update_layout(height=800, showlegend=True, xaxis_rangeslider_visible=False)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    st.subheader("Current Stats")
+                    s1, s2, s3, s4, s5 = st.columns(5)
+                    cur = df['Close'].iloc[-1]
+                    rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 0
+                    vr = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns else 1.0
+                    adx = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
+                    s1.metric("Price", f"${cur:.2f}", f"{info.get('change_pct',0):+.2f}%")
+                    s2.metric("RSI", f"{rsi:.1f}")
+                    s3.metric("Volume Ratio", f"{vr:.2f}x")
+                    s4.metric("ADX", f"{adx:.1f}")
+                    try:
+                        pret = (df['Close'].iloc[-1] / df['Close'].iloc[0] - 1) * 100
+                        s5.metric(f"{period} Return", f"{pret:+.1f}%")
+                    except Exception:
+                        s5.metric(f"{period} Return", "n/a")
+
+                    sc = ta_scorecard(df)
+                    if sc:
+                        vcolor = {"BUY": "#22c55e", "SELL": "#ef4444", "HOLD": "#eab308"}[sc["verdict"]]
+                        st.markdown(
+                            f"<div style='border:1px solid #2a2f3a;border-radius:8px;padding:10px 14px;margin:8px 0;'>"
+                            f"<span style='font-size:.8rem;color:#9aa4b2'>Technical signal</span><br>"
+                            f"<span style='font-size:1.5rem;font-weight:700;color:{vcolor}'>{sc['verdict']}</span> "
+                            f"<span style='color:#9aa4b2;font-size:.85rem'>· {sc['bull']} bullish / {sc['bear']} bearish / {sc['neutral']} neutral "
+                            f"(score {sc['score']:+d})</span></div>", unsafe_allow_html=True)
+                        sig_map = {1: "🟢 Bullish", 0: "⚪ Neutral", -1: "🔴 Bearish"}
+                        srows = [{"Indicator": r["indicator"], "Signal": sig_map[r["signal"]], "Reading": r["detail"]}
+                                 for r in sc["rows"]]
+                        st.dataframe(pd.DataFrame(srows), use_container_width=True, hide_index=True)
+                        st.caption("Each indicator votes bullish/bearish/neutral; the verdict is the net. This is a "
+                                   "mechanical read of price/volume momentum and trend, not a recommendation — combine with "
+                                   "fundamentals and your entry targets.")
+                        with st.expander("📖 What do these indicators mean?"):
+                            for term, desc in TA_GLOSSARY:
+                                st.markdown(f"**{term}** — {desc}")
+
+                    t_tgt = AI_ENTRY_TARGETS.get(chosen)
+                    if t_tgt:
+                        zone, _ = ai_entry_zone(chosen, cur)
+                        st.info(f"**AI portfolio holding — entry targets:** optimal ${t_tgt['optimal']:,.2f} · "
+                                f"secondary ${t_tgt['secondary']:,.2f} · do-not-exceed ${t_tgt['ceiling']:,.2f}  →  **{zone}**")
+            except Exception as e:
+                st.error(f"Error loading chart: {e}")
+
+        # ===== Tab 2: Overview (finviz-style snapshot grid) =====
+        with research_tabs[1]:
+            with st.spinner(f"Fetching {chosen} overview data..."):
+                ov_info = stock_overview_info(chosen)
+            if not ov_info:
+                st.warning("Overview data temporarily unavailable.")
             else:
-                hist = t.history(period=period, interval="1d")
+                nm2 = ov_info.get("longName", chosen)
+                st.markdown(f"**{nm2}**")
+                summary = ov_info.get("longBusinessSummary", "")
+                if summary:
+                    with st.expander("Business summary", expanded=False):
+                        st.write(summary)
+                grid = stock_overview_grid(ov_info)
+                grid_cols = st.columns(3)
+                cats = list(grid.keys())
+                for i, cat in enumerate(cats):
+                    with grid_cols[i % 3]:
+                        st.markdown(f"**{cat}**")
+                        for label, val in grid[cat]:
+                            st.markdown(f"<div style='display:flex;justify-content:space-between;font-size:.85rem;padding:2px 0;'>"
+                                       f"<span style='color:#9aa4b2'>{label}</span><span>{val}</span></div>",
+                                       unsafe_allow_html=True)
+                        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                st.caption("Data from Yahoo Finance via yfinance. Fields show 'n/a' when the data provider doesn't report that metric for this security (common for ETFs, foreign listings, or recent IPOs).")
 
-            if not hist.empty:
-                df = calculate_technical_indicators(hist)
+        # ===== Tab 3: Financials (full statements + ratios) =====
+        with research_tabs[2]:
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                fin_statement = st.selectbox("Statement", ["Income Statement", "Balance Sheet", "Cash Flow"], key="fin_statement")
+            with fc2:
+                fin_period = st.radio("Period", ["Annual", "Quarterly"], horizontal=True, key="fin_period")
+            stmt_key = {"Income Statement": "income", "Balance Sheet": "balance", "Cash Flow": "cashflow"}[fin_statement]
+            period_key = "quarterly" if fin_period == "Quarterly" else "annual"
+            with st.spinner(f"Fetching {chosen} {fin_statement.lower()}..."):
+                stmt_df = stock_financial_statements(chosen, stmt_key, period_key)
+            if stmt_df.empty:
+                st.info(f"{fin_statement} data unavailable for {chosen} (common for ETFs, foreign listings, or thinly-covered names).")
+            else:
+                disp = stmt_df.copy()
+                disp.columns = [pd.Timestamp(c).strftime("%b %Y") for c in disp.columns]
+                def _fmt_cell(v):
+                    if pd.isna(v): return ""
+                    av = abs(v)
+                    if av >= 1e9: return f"{v/1e9:,.2f}B"
+                    if av >= 1e6: return f"{v/1e6:,.1f}M"
+                    return f"{v:,.0f}"
+                disp = disp.apply(lambda col: col.map(_fmt_cell))
+                st.dataframe(disp, use_container_width=True, height=460)
+                st.caption("All figures in USD. Source: Yahoo Finance via yfinance.")
 
-                fig = make_subplots(
-                    rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
-                    row_heights=[0.6, 0.2, 0.2],
-                    subplot_titles=(f'{chosen} Price', 'RSI', 'Volume')
-                )
-                fig.add_trace(go.Candlestick(
-                    x=df.index, open=df['Open'], high=df['High'],
-                    low=df['Low'], close=df['Close'], name='Price'), row=1, col=1)
-                for p, color in [(20, 'orange'), (50, 'blue'), (200, 'purple')]:
-                    if f'SMA_{p}' in df.columns:
-                        fig.add_trace(go.Scatter(x=df.index, y=df[f'SMA_{p}'],
-                                     name=f'SMA {p}', line=dict(color=color, width=1)), row=1, col=1)
-                if 'RSI' in df.columns:
-                    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI',
-                                 line=dict(color='purple', width=1)), row=2, col=1)
-                    fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
-                    fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
-                fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume',
-                             marker_color='lightblue'), row=3, col=1)
-                fig.update_layout(height=800, showlegend=True, xaxis_rangeslider_visible=False)
-                st.plotly_chart(fig, use_container_width=True)
+            st.divider()
+            st.markdown("##### Key Ratios")
+            with st.spinner("Computing ratios..."):
+                inc_a = stock_financial_statements(chosen, "income", "annual")
+                bal_a = stock_financial_statements(chosen, "balance", "annual")
+                cf_a = stock_financial_statements(chosen, "cashflow", "annual")
+                ratios = stock_compute_ratios(chosen, ov_info if 'ov_info' in dir() else stock_overview_info(chosen), inc_a, bal_a, cf_a)
+            if ratios:
+                rcols = st.columns(4)
+                for i, (label, val) in enumerate(ratios.items()):
+                    rcols[i % 4].metric(label, val)
+                st.caption("Ratios computed from the most recent annual statements (or from Yahoo's reported margins where statement line items aren't available). "
+                           "Row-label matching is best-effort since exact statement line-item names vary by company and data-provider version.")
+            else:
+                st.info("Insufficient statement data to compute ratios for this security.")
 
-                # current stats
-                st.subheader("Current Stats")
-                s1, s2, s3, s4, s5 = st.columns(5)
-                cur = df['Close'].iloc[-1]
-                rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 0
-                vr = df['Volume_Ratio'].iloc[-1] if 'Volume_Ratio' in df.columns else 1.0
-                adx = df['ADX'].iloc[-1] if 'ADX' in df.columns else 0
-                s1.metric("Price", f"${cur:.2f}", f"{info.get('change_pct',0):+.2f}%")
-                s2.metric("RSI", f"{rsi:.1f}")
-                s3.metric("Volume Ratio", f"{vr:.2f}x")
-                s4.metric("ADX", f"{adx:.1f}")
-                # period return
-                try:
-                    pret = (df['Close'].iloc[-1] / df['Close'].iloc[0] - 1) * 100
-                    s5.metric(f"{period} Return", f"{pret:+.1f}%")
-                except Exception:
-                    s5.metric(f"{period} Return", "n/a")
+        # ===== Tab 4: Peer Comparison =====
+        with research_tabs[3]:
+            st.caption("Compare key metrics against other tickers. Enter comma-separated symbols.")
+            default_peers = ""
+            _ov_sector = (ov_info or {}).get("sector") if 'ov_info' in dir() else None
+            peer_input = st.text_input("Peer tickers (comma-separated)", value=default_peers,
+                                       placeholder="e.g. AMD, AVGO, TSM", key="peer_tickers_input")
+            peer_list = [p.strip().upper() for p in peer_input.split(",") if p.strip()]
+            all_tickers = [chosen] + [p for p in peer_list if p != chosen]
+            if len(all_tickers) < 2:
+                st.info("Add at least one peer ticker above to see a comparison.")
+            else:
+                with st.spinner("Fetching peer data..."):
+                    comp_df = stock_peer_comparison(all_tickers)
+                if comp_df.empty:
+                    st.warning("Could not fetch peer comparison data.")
+                else:
+                    st.dataframe(comp_df, use_container_width=True)
+                    st.caption(f"**{chosen}** (first column) is the selected ticker. Sector/industry: "
+                               f"{(ov_info or {}).get('sector','n/a') if 'ov_info' in dir() else 'n/a'} / "
+                               f"{(ov_info or {}).get('industry','n/a') if 'ov_info' in dir() else 'n/a'}.")
 
-                # ----- Technical scorecard (buy/sell/hold) -----
-                sc = ta_scorecard(df)
-                if sc:
-                    vcolor = {"BUY": "#22c55e", "SELL": "#ef4444", "HOLD": "#eab308"}[sc["verdict"]]
-                    st.markdown(
-                        f"<div style='border:1px solid #2a2f3a;border-radius:8px;padding:10px 14px;margin:8px 0;'>"
-                        f"<span style='font-size:.8rem;color:#9aa4b2'>Technical signal</span><br>"
-                        f"<span style='font-size:1.5rem;font-weight:700;color:{vcolor}'>{sc['verdict']}</span> "
-                        f"<span style='color:#9aa4b2;font-size:.85rem'>· {sc['bull']} bullish / {sc['bear']} bearish / {sc['neutral']} neutral "
-                        f"(score {sc['score']:+d})</span></div>", unsafe_allow_html=True)
-                    sig_map = {1: "🟢 Bullish", 0: "⚪ Neutral", -1: "🔴 Bearish"}
-                    srows = [{"Indicator": r["indicator"], "Signal": sig_map[r["signal"]], "Reading": r["detail"]}
-                             for r in sc["rows"]]
-                    st.dataframe(pd.DataFrame(srows), use_container_width=True, hide_index=True)
-                    st.caption("Each indicator votes bullish/bearish/neutral; the verdict is the net. This is a "
-                               "mechanical read of price/volume momentum and trend, not a recommendation — combine with "
-                               "fundamentals and your entry targets.")
-                    with st.expander("📖 What do these indicators mean?"):
-                        for term, desc in TA_GLOSSARY:
-                            st.markdown(f"**{term}** — {desc}")
-
-                # if this symbol is an AI holding, surface its entry targets
-                t_tgt = AI_ENTRY_TARGETS.get(chosen)
-                if t_tgt:
-                    zone, _ = ai_entry_zone(chosen, cur)
-                    st.info(f"**AI portfolio holding — entry targets:** optimal ${t_tgt['optimal']:,.2f} · "
-                            f"secondary ${t_tgt['secondary']:,.2f} · do-not-exceed ${t_tgt['ceiling']:,.2f}  →  **{zone}**")
-        except Exception as e:
-            st.error(f"Error loading chart: {e}")
+        # ===== Tab 5: Research Links (EDGAR, IR, earnings) =====
+        with research_tabs[4]:
+            links = stock_research_links(chosen)
+            ei = em_earnings_info(chosen)
+            lc1, lc2 = st.columns([1, 2])
+            with lc1:
+                if ei.get("next"):
+                    st.metric("Next earnings", ei["next"], (f"in {ei['days_until']}d" if ei.get("days_until") is not None else None), delta_color="off")
+                elif ei.get("last"):
+                    st.metric("Last earnings", ei["last"], delta_color="off")
+            with lc2:
+                st.markdown(
+                    f"**Deeper dive:** "
+                    f"[SEC filings (EDGAR)]({links['edgar_full']}) · "
+                    f"[Latest 10-K/10-Q]({links['edgar_10k']}) · "
+                    f"[Yahoo estimates]({links['yf_estimates']}) · "
+                    f"[Yahoo financials]({links['yf_financials']}) · "
+                    f"[Press releases]({links['yf_press']}) · "
+                    f"[Investor Relations ↗]({links['ir_search']})")
+            st.caption("EDGAR links go straight to the company's filings (10-K annual, 10-Q quarterly, 8-K for earnings). "
+                       "The IR link is a search since IR URLs aren't standardized.")
+            if 'ov_info' in dir() and ov_info and ov_info.get("website"):
+                st.markdown(f"**Website:** [{ov_info['website']}]({ov_info['website']})")
 
 
 # ========================================
@@ -8600,30 +9031,33 @@ elif selected == "Macro Dashboard":
             else:
                 st.info("No data available for the selected spread(s) and date range.")
 
-    # ===== Economic Data (FRED) =====
+    # ===== Economic Data (BLS — replaces FRED, added v15) =====
     st.divider()
     st.subheader("Economic Data")
-    st.caption("Latest releases from FRED (Federal Reserve Bank of St. Louis). Inflation shown year-over-year; claims weekly; payrolls/JOLTS monthly.")
-    if not _fred_key():
-        with st.expander("⚙️ FRED data not loading? Add a free API key"):
-            st.markdown("FRED's no-key CSV endpoint can be throttled on shared cloud IPs. For reliable data, get a "
-                        "free key at [fredaccount.stlouisfed.org](https://fredaccount.stlouisfed.org/apikeys) and either "
-                        "add it to Streamlit secrets as `FRED_API_KEY`, or paste it below for this session.")
-            _k = st.text_input("FRED API key (this session only)", type="password", key="fred_key_input")
-            if _k:
-                st.session_state["user_fred_key"] = _k
+    st.caption("Sourced directly from the U.S. Bureau of Labor Statistics — not FRED. Inflation shown year-over-year; "
+               "payrolls/JOLTS/wages monthly. Jobless Claims and PCE are dropped here since neither is a BLS series "
+               "(Claims is DOL/ETA data; PCE is BEA data) — this board is BLS-only.")
+    if not _bls_key():
+        with st.expander("⚙️ Add your BLS API key (optional — raises the daily query limit)"):
+            st.markdown("The BLS Public API works without a key at a lower rate limit (25 queries/day, 10-year lookback). "
+                        "A free registered key raises this to 500 queries/day and 20 years. Register at "
+                        "[bls.gov/developers](https://www.bls.gov/developers/) and either add it to Streamlit secrets as "
+                        "`BLS_API_KEY` (recommended — never exposed in chat or source), or paste it below for this session only.")
+            _bk = st.text_input("BLS API key (this session only)", type="password", key="bls_key_input")
+            if _bk:
+                st.session_state["user_bls_key"] = _bk
                 st.success("Key set for this session. Refresh the data below.")
-    with st.spinner("Fetching FRED economic series..."):
-        eco = fred_macro_board()
+    with st.spinner("Fetching BLS economic series..."):
+        eco = bls_labor_inflation_board()
     if eco:
-        labor = ["Initial Jobless Claims", "Continuing Claims", "Nonfarm Payrolls (MoM)", "Unemployment Rate", "Job Openings (JOLTS)"]
-        infl = ["CPI (YoY)", "Core CPI (YoY)", "PPI Final Demand (YoY)", "PCE (YoY)", "Core PCE (YoY)"]
+        labor = ["Nonfarm Payrolls (MoM)", "Unemployment Rate", "Job Openings (JOLTS)", "Avg Hourly Earnings (YoY)"]
+        infl = ["CPI (YoY)", "Core CPI (YoY)", "PPI Final Demand (YoY)"]
         st.markdown("**Labor Market**")
         lp = [k for k in labor if k in eco]
         if lp:
             lc = st.columns(len(lp))
             for i, k in enumerate(lp):
-                lc[i].metric(k.replace(" (MoM)", ""), eco[k]["value"], eco[k]["sub"], delta_color="off",
+                lc[i].metric(k.replace(" (MoM)", "").replace(" (YoY)", ""), eco[k]["value"], eco[k]["sub"], delta_color="off",
                              help=f"As of {eco[k]['asof']}")
         st.markdown("**Inflation**")
         ip = [k for k in infl if k in eco]
@@ -8633,7 +9067,7 @@ elif selected == "Macro Dashboard":
                 ic[i].metric(k.replace(" (YoY)", ""), eco[k]["value"], eco[k]["sub"], delta_color="off",
                              help=f"As of {eco[k]['asof']}")
     else:
-        st.info("FRED economic data temporarily unavailable.")
+        st.info("BLS economic data temporarily unavailable.")
 
     # ===== Sentiment =====
     st.divider()
