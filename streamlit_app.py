@@ -1536,9 +1536,8 @@ def validate_ticker(symbol):
         # name lookup is best-effort; never fail on it
         name = symbol
         try:
-            fi = getattr(t, "fast_info", None)
-            info = t.info if not fi else {}
-            name = (info.get("shortName") or info.get("longName") or symbol) if info else symbol
+            info = t.info or {}
+            name = info.get("shortName") or info.get("longName") or symbol
         except Exception:
             name = symbol
         return True, {"symbol": symbol, "price": price, "change": chg,
@@ -6215,6 +6214,235 @@ def ai_mandate_alerts(nav, holdings, thresholds=None):
     return alerts
 
 
+# ===== Ticker/company-name resolution (added v17) =====
+import urllib.parse as _up2
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def resolve_symbol_or_name(query):
+    """Resolve a user-typed ticker OR company name to (ticker, matched_name).
+    Tries the input as a literal ticker first (fast path for the common case),
+    then falls back to Yahoo Finance's search endpoint for company-name lookups.
+    Returns (None, None) if nothing resolves."""
+    query = (query or "").strip()
+    if not query:
+        return None, None
+    q_upper = query.upper()
+    looks_like_ticker = (" " not in query) and len(query) <= 6 and query.replace(".", "").replace("-", "").isalnum()
+    if looks_like_ticker:
+        valid, info = validate_ticker(q_upper)
+        if valid:
+            return q_upper, info.get("name", q_upper)
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={_up2.quote(query)}&quotesCount=5&newsCount=0"
+        req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with _urlreq.urlopen(req, timeout=8) as r:
+            js = json.loads(r.read())
+        quotes = js.get("quotes", [])
+        for q in quotes:
+            if q.get("quoteType") in ("EQUITY", "ETF") and q.get("symbol"):
+                sym = q["symbol"]
+                nm = q.get("shortname") or q.get("longname") or sym
+                return sym, nm
+        if quotes and quotes[0].get("symbol"):
+            q = quotes[0]
+            return q["symbol"], q.get("shortname") or q.get("longname") or q["symbol"]
+    except Exception:
+        pass
+    valid, info = validate_ticker(q_upper)
+    if valid:
+        return q_upper, info.get("name", q_upper)
+    return None, None
+
+
+# ===== Automatic peer discovery + ranking (added v17) =====
+@st.cache_data(ttl=21600, show_spinner=False)
+def stock_similar_from_yahoo(ticker):
+    """Yahoo's own related-symbols endpoint. Best-effort; unofficial API so
+    failures are expected and handled gracefully. Returns a list of tickers."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v6/finance/recommendationsbysymbol/{ticker}"
+        req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with _urlreq.urlopen(req, timeout=8) as r:
+            js = json.loads(r.read())
+        results = js.get("finance", {}).get("result", [])
+        if not results:
+            return []
+        syms = [r.get("symbol") for r in results[0].get("recommendedSymbols", []) if r.get("symbol")]
+        return syms
+    except Exception:
+        return []
+
+# Curated fallback baskets. Industry (finer-grained) is tried first, then Sector.
+# Not exhaustive — covers the industries/sectors most likely to come up — but
+# every basket has enough names to hit the 5-10 peer target on its own.
+PEER_INDUSTRY_BASKETS = {
+    "Healthcare Plans": ["UNH", "ELV", "CI", "CVS", "HUM", "CNC", "MOH"],
+    "Drug Manufacturers - General": ["LLY", "JNJ", "PFE", "MRK", "ABBV", "BMY", "NVO"],
+    "Biotechnology": ["AMGN", "GILD", "REGN", "VRTX", "BIIB", "MRNA", "ILMN"],
+    "Medical Devices": ["MDT", "SYK", "BSX", "ISRG", "EW", "ZBH", "BDX"],
+    "Semiconductors": ["NVDA", "AMD", "AVGO", "QCOM", "TXN", "INTC", "MU", "ON"],
+    "Semiconductor Equipment & Materials": ["ASML", "AMAT", "LRCX", "KLAC", "TER"],
+    "Software - Infrastructure": ["MSFT", "ORCL", "CRM", "NOW", "PANW", "SNOW", "FTNT"],
+    "Software - Application": ["ADBE", "INTU", "WDAY", "TEAM", "ADSK", "CRWD"],
+    "Internet Content & Information": ["GOOGL", "META", "PINS", "SNAP", "MTCH"],
+    "Internet Retail": ["AMZN", "EBAY", "ETSY", "MELI", "JD", "BABA"],
+    "Consumer Electronics": ["AAPL", "SONY", "SSNLF", "GPRO"],
+    "Auto Manufacturers": ["TSLA", "GM", "F", "TM", "STLA", "RIVN"],
+    "Banks - Diversified": ["JPM", "BAC", "WFC", "C", "USB", "PNC", "TFC"],
+    "Credit Services": ["V", "MA", "AXP", "COF", "DFS", "PYPL"],
+    "Asset Management": ["BLK", "BX", "KKR", "APO", "TROW", "BEN"],
+    "Insurance - Diversified": ["BRK-B", "AIG", "MET", "PRU", "ALL", "TRV"],
+    "Oil & Gas Integrated": ["XOM", "CVX", "SHEL", "BP", "TTE"],
+    "Oil & Gas E&P": ["EOG", "PXD", "DVN", "FANG", "OXY", "CTRA"],
+    "Utilities - Regulated Electric": ["NEE", "SO", "DUK", "AEP", "EXC", "D"],
+    "Aerospace & Defense": ["BA", "LMT", "RTX", "NOC", "GD", "LHX"],
+    "Airlines": ["DAL", "UAL", "AAL", "LUV", "ALK"],
+    "Restaurants": ["MCD", "SBUX", "CMG", "YUM", "DPZ", "QSR"],
+    "Beverages - Non-Alcoholic": ["KO", "PEP", "KDP", "MNST", "CELH"],
+    "Household & Personal Products": ["PG", "CL", "KMB", "CHD", "EL"],
+    "Discount Stores": ["WMT", "COST", "TGT", "DG", "DLTR"],
+    "Specialty Retail": ["HD", "LOW", "TJX", "ROST", "BBY"],
+    "Telecom Services": ["T", "VZ", "TMUS", "CMCSA", "CHTR"],
+    "REIT - Residential": ["AVB", "EQR", "MAA", "ESS", "UDR"],
+    "REIT - Industrial": ["PLD", "DRE", "FR", "REXR"],
+    "Building Products & Equipment": ["TT", "JCI", "CARR", "LII", "AOS"],
+    "Specialty Chemicals": ["LIN", "APD", "ECL", "SHW", "DD"],
+    "Railroads": ["UNP", "CSX", "NSC"],
+    "Integrated Freight & Logistics": ["UPS", "FDX", "EXPD", "CHRW"],
+}
+PEER_SECTOR_BASKETS = {
+    "Technology": ["AAPL", "MSFT", "NVDA", "GOOGL", "AVGO", "ORCL", "CRM", "ADBE"],
+    "Healthcare": ["UNH", "JNJ", "LLY", "ABBV", "MRK", "PFE", "TMO", "ABT"],
+    "Financial Services": ["JPM", "BAC", "WFC", "V", "MA", "GS", "MS", "BLK"],
+    "Consumer Cyclical": ["AMZN", "TSLA", "HD", "MCD", "NKE", "SBUX", "TJX"],
+    "Consumer Defensive": ["WMT", "PG", "KO", "PEP", "COST", "CL", "MDLZ"],
+    "Energy": ["XOM", "CVX", "COP", "SLB", "EOG", "PSX", "MPC"],
+    "Industrials": ["HON", "UNP", "CAT", "GE", "RTX", "BA", "LMT"],
+    "Utilities": ["NEE", "SO", "DUK", "AEP", "D", "EXC", "SRE"],
+    "Real Estate": ["PLD", "AMT", "EQIX", "PSA", "SPG", "O"],
+    "Communication Services": ["GOOGL", "META", "NFLX", "DIS", "TMUS", "VZ", "T"],
+    "Basic Materials": ["LIN", "APD", "SHW", "ECL", "FCX", "NEM"],
+}
+
+def stock_find_peers(ticker, sector, industry, target_count=8):
+    """Assemble a peer list: Yahoo's own similar-symbols first, topped up from
+    the curated industry/sector basket if needed. Excludes the ticker itself."""
+    ticker = ticker.upper()
+    peers = []
+    seen = {ticker}
+    for sym in stock_similar_from_yahoo(ticker):
+        s = sym.upper()
+        if s not in seen:
+            seen.add(s); peers.append(s)
+        if len(peers) >= target_count:
+            break
+    if len(peers) < min(5, target_count):
+        basket = PEER_INDUSTRY_BASKETS.get(industry) or PEER_SECTOR_BASKETS.get(sector) or []
+        for s in basket:
+            s = s.upper()
+            if s not in seen:
+                seen.add(s); peers.append(s)
+            if len(peers) >= target_count:
+                break
+    return peers[:target_count]
+
+# ---------- Ranking ----------
+# Higher-is-better metrics get a positive weight; lower-is-better (valuation
+# multiples) get a negative weight, so the composite favors cheaper + higher
+# quality/growth names. This is a transparent, simple heuristic — not a
+# claim of objective "best stock" ranking.
+PEER_RANK_WEIGHTS = {
+    "grossMargins": 1.0, "operatingMargins": 1.0, "returnOnEquity": 1.0,
+    "revenueGrowth": 1.0, "_analyst_upside": 1.0,
+    "forwardPE": -1.0, "trailingPegRatio": -1.0, "enterpriseToEbitda": -0.5,
+}
+
+def stock_rank_peers(infos):
+    """infos: {ticker: .info dict}. Returns a list of (ticker, composite_score)
+    sorted best-to-worst, using min-max normalization within this peer set so
+    the ranking is relative to the group being compared, not an absolute scale."""
+    tickers = list(infos.keys())
+    if len(tickers) < 2:
+        return [(t, 0.0) for t in tickers]
+    raw = {}
+    for tk, info in infos.items():
+        vals = dict(info)
+        tp = info.get("targetMeanPrice"); cp = info.get("currentPrice") or info.get("regularMarketPrice")
+        vals["_analyst_upside"] = ((tp / cp - 1) * 100) if (tp and cp) else None
+        raw[tk] = vals
+    norm_scores = {tk: 0.0 for tk in tickers}
+    counted = {tk: 0 for tk in tickers}
+    for field, weight in PEER_RANK_WEIGHTS.items():
+        col = {tk: raw[tk].get(field) for tk in tickers}
+        vals = [v for v in col.values() if v is not None]
+        if len(vals) < 2:
+            continue
+        lo, hi = min(vals), max(vals)
+        if hi == lo:
+            continue
+        for tk in tickers:
+            v = col[tk]
+            if v is None:
+                continue
+            norm = (v - lo) / (hi - lo)   # 0..1, higher raw value -> higher norm
+            score = norm if weight > 0 else (1 - norm)
+            norm_scores[tk] += score * abs(weight)
+            counted[tk] += abs(weight)
+    ranked = []
+    for tk in tickers:
+        avg = (norm_scores[tk] / counted[tk]) if counted[tk] > 0 else 0.0
+        ranked.append((tk, avg))
+    ranked.sort(key=lambda x: x[1], reverse=True)
+    return ranked
+
+PEER_COMPARISON_METRICS = [
+    ("Market Cap", "marketCap", "big"), ("P/E (fwd)", "forwardPE", "num"),
+    ("PEG", "trailingPegRatio", "num"), ("EV/EBITDA", "enterpriseToEbitda", "num"),
+    ("Gross Margin", "grossMargins", "pct"), ("Operating Margin", "operatingMargins", "pct"),
+    ("ROE", "returnOnEquity", "pct"), ("Revenue Growth", "revenueGrowth", "pct"),
+    ("Analyst Upside", "_analyst_upside", "pct_raw"), ("Div Yield", "dividendYield", "pct"),
+]
+
+def stock_peer_comparison_ranked(chosen, peer_tickers):
+    """Fetch info for chosen + auto-discovered peers, rank them, and build a
+    comparison DataFrame ordered best-to-worst by the composite rank score.
+    Returns (df, ranked_list, infos) — df columns are tickers in rank order,
+    df has a 'Rank' row and a metrics row per PEER_COMPARISON_METRICS entry."""
+    all_tickers = [chosen] + [p for p in peer_tickers if p != chosen]
+    infos = {}
+    for tk in all_tickers:
+        i = stock_overview_info(tk)
+        if i:
+            infos[tk] = i
+    if len(infos) < 2:
+        return pd.DataFrame(), [], infos
+
+    ranked = stock_rank_peers(infos)
+    ordered_tickers = [tk for tk, _ in ranked]
+
+    rows = []
+    rank_row = {"Metric": "Composite Rank"}
+    for i, (tk, score) in enumerate(ranked, 1):
+        rank_row[tk] = f"#{i} ({score:.2f})"
+    rows.append(rank_row)
+
+    for label, field, kind in PEER_COMPARISON_METRICS:
+        row = {"Metric": label}
+        for tk in ordered_tickers:
+            info = infos[tk]
+            if field == "_analyst_upside":
+                tp = info.get("targetMeanPrice"); cp = info.get("currentPrice") or info.get("regularMarketPrice")
+                v = ((tp / cp - 1) * 100) if (tp and cp) else None
+                row[tk] = f"{v:+.1f}%" if v is not None else "n/a"
+            else:
+                row[tk] = _fmt_num(info.get(field), kind)
+        rows.append(row)
+
+    df = pd.DataFrame(rows).set_index("Metric")
+    df = df[ordered_tickers]
+    return df, ranked, infos
+
+
 # ========================================
 # HOME — Market Dashboard (landing page)
 # ========================================
@@ -7465,20 +7693,28 @@ elif selected == "Performance":
 
 elif selected == "Chart Analysis":
     st.header("📈 Chart Analysis")
-    st.caption("Type any stock or ETF symbol, or quick-pick a default / AI-portfolio holding.")
+    st.caption("Type a stock/ETF ticker OR a company name (e.g. 'NVDA' or 'Nvidia'), or quick-pick a default / AI-portfolio holding.")
 
-    # symbol entry row: free text + two quick-pick sources
+    # symbol entry row: free text (ticker or name) + two quick-pick sources
     ec1, ec2, ec3 = st.columns([2, 1, 1])
     with ec1:
-        typed = st.text_input("Search symbol", placeholder="e.g. NVDA, AAPL, VOO, SMH", key="chart_typed").strip().upper()
+        typed_raw = st.text_input("Search symbol or company name", placeholder="e.g. NVDA, AAPL, or 'UnitedHealth'", key="chart_typed").strip()
     with ec2:
         default_pick = st.selectbox("Defaults", ["—"] + TICKERS, key="chart_default_pick")
     with ec3:
         ai_list = ai_portfolio_tickers()
         ai_pick = st.selectbox("AI portfolio", ["—"] + ai_list, key="chart_ai_pick")
 
-    # precedence: typed > AI pick > default pick > SPY
-    chosen = typed or (ai_pick if ai_pick != "—" else "") or (default_pick if default_pick != "—" else "") or "SPY"
+    # resolve free text (ticker OR company name) to an actual symbol
+    typed_resolved, typed_resolved_name = (None, None)
+    if typed_raw:
+        with st.spinner(f"Looking up '{typed_raw}'..."):
+            typed_resolved, typed_resolved_name = resolve_symbol_or_name(typed_raw)
+        if typed_raw and not typed_resolved:
+            st.warning(f"Could not resolve '{typed_raw}' to a ticker. Try the exact symbol, or a more specific company name.")
+
+    # precedence: resolved typed input > AI pick > default pick > SPY
+    chosen = typed_resolved or (ai_pick if ai_pick != "—" else "") or (default_pick if default_pick != "—" else "") or "SPY"
 
     period = st.radio("History", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "Custom"], index=2, horizontal=True, key="chart_period")
     _cust_start = _cust_end = None
@@ -7644,27 +7880,32 @@ elif selected == "Chart Analysis":
             else:
                 st.info("Insufficient statement data to compute ratios for this security.")
 
-        # ===== Tab 4: Peer Comparison =====
+        # ===== Tab 4: Peer Comparison (auto-discovered, ranked) =====
         with research_tabs[3]:
-            st.caption("Compare key metrics against other tickers. Enter comma-separated symbols.")
-            default_peers = ""
-            _ov_sector = (ov_info or {}).get("sector") if 'ov_info' in dir() else None
-            peer_input = st.text_input("Peer tickers (comma-separated)", value=default_peers,
-                                       placeholder="e.g. AMD, AVGO, TSM", key="peer_tickers_input")
-            peer_list = [p.strip().upper() for p in peer_input.split(",") if p.strip()]
-            all_tickers = [chosen] + [p for p in peer_list if p != chosen]
-            if len(all_tickers) < 2:
-                st.info("Add at least one peer ticker above to see a comparison.")
+            _sector = (ov_info or {}).get("sector") if 'ov_info' in dir() else None
+            _industry = (ov_info or {}).get("industry") if 'ov_info' in dir() else None
+            st.caption(f"Peers are inferred automatically from sector/industry — "
+                       f"**{_sector or 'n/a'} / {_industry or 'n/a'}** — no manual entry needed.")
+            with st.spinner(f"Finding comparable companies for {chosen}..."):
+                peer_list = stock_find_peers(chosen, _sector, _industry, target_count=8)
+            if not peer_list:
+                st.warning("Could not find comparable companies for this ticker (sector/industry data may be unavailable).")
             else:
-                with st.spinner("Fetching peer data..."):
-                    comp_df = stock_peer_comparison(all_tickers)
+                with st.spinner("Fetching peer data and ranking..."):
+                    comp_df, ranked, infos = stock_peer_comparison_ranked(chosen, peer_list)
                 if comp_df.empty:
                     st.warning("Could not fetch peer comparison data.")
                 else:
+                    my_rank = next((i for i, (tk, _) in enumerate(ranked, 1) if tk == chosen), None)
+                    if my_rank:
+                        st.info(f"**{chosen}** ranks **#{my_rank} of {len(ranked)}** in this peer group on the composite score below.")
                     st.dataframe(comp_df, use_container_width=True)
-                    st.caption(f"**{chosen}** (first column) is the selected ticker. Sector/industry: "
-                               f"{(ov_info or {}).get('sector','n/a') if 'ov_info' in dir() else 'n/a'} / "
-                               f"{(ov_info or {}).get('industry','n/a') if 'ov_info' in dir() else 'n/a'}.")
+                    st.caption(
+                        f"Peers found via Yahoo's similar-companies data, topped up from a sector/industry basket if needed. "
+                        f"Columns are ordered best→worst by a composite rank (higher margins/ROE/growth/analyst-upside score better; "
+                        f"higher P/E, PEG, EV/EBITDA score worse — each metric normalized within this peer group, then averaged). "
+                        f"This is a transparent heuristic, not a claim of objective 'best stock' — use it as a starting point for judgment, not a verdict."
+                    )
 
         # ===== Tab 5: Research Links (EDGAR, IR, earnings) =====
         with research_tabs[4]:
