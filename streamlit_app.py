@@ -6443,6 +6443,105 @@ def stock_peer_comparison_ranked(chosen, peer_tickers):
     return df, ranked, infos
 
 
+# ===== Table formatting fixes: numeric sort + statement row order (added v18) =====
+def cc_money(label, decimals=2, help_text=None):
+    return st.column_config.NumberColumn(label, format=f"$%,.{decimals}f", help=help_text)
+
+def cc_money_signed(label, decimals=0, help_text=None):
+    return st.column_config.NumberColumn(label, format=f"$%+,.{decimals}f", help=help_text)
+
+def cc_percent(label, decimals=1, signed=False, help_text=None):
+    fmt = ("%+." if signed else "%.") + f"{decimals}f%%"
+    return st.column_config.NumberColumn(label, format=fmt, help=help_text)
+
+def cc_number(label, decimals=1, signed=False, help_text=None):
+    fmt = ("%+." if signed else "%.") + f"{decimals}f"
+    return st.column_config.NumberColumn(label, format=fmt, help=help_text)
+
+def cc_int(label, signed=False, help_text=None):
+    fmt = "%+d" if signed else "%d"
+    return st.column_config.NumberColumn(label, format=fmt, help=help_text)
+
+def cc_text(label, help_text=None):
+    return st.column_config.TextColumn(label, help=help_text)
+
+# ---------- Financial statement conventional row order ----------
+STATEMENT_ROW_ORDER = {
+    "income": [
+        "Total Revenue", "Operating Revenue", "Cost Of Revenue", "Reconciled Cost Of Revenue",
+        "Gross Profit", "Selling General And Administration", "Research And Development",
+        "Total Operating Expenses", "Operating Income", "Operating Expense",
+        "Net Non Operating Interest Income Expense", "Interest Expense Non Operating",
+        "Interest Income Non Operating", "Interest Expense", "Interest Income",
+        "Other Income Expense", "Other Non Operating Income Expenses", "Pretax Income",
+        "Tax Provision", "Tax Rate For Calcs", "Net Income Common Stockholders",
+        "Net Income", "Net Income Continuous Operations", "Net Income Including Noncontrolling Interests",
+        "Minority Interests", "Net Income From Continuing And Discontinued Operation",
+        "EBIT", "EBITDA", "Normalized EBITDA", "Normalized Income",
+        "Basic EPS", "Diluted EPS", "Basic Average Shares", "Diluted Average Shares",
+        "Diluted NI Availto Com Stockholders",
+        "Depreciation And Amortization In Income Statement", "Impairment Of Capital Assets",
+        "Total Unusual Items", "Total Unusual Items Excluding Goodwill",
+    ],
+    "balance": [
+        "Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments",
+        "Short Term Investments", "Cash Equivalents", "Receivables", "Accounts Receivable",
+        "Inventory", "Other Current Assets", "Total Current Assets", "Current Assets",
+        "Net PPE", "Gross PPE", "Accumulated Depreciation", "Goodwill", "Other Intangible Assets",
+        "Goodwill And Other Intangible Assets", "Investments And Advances", "Other Non Current Assets",
+        "Total Non Current Assets", "Non Current Deferred Assets", "Total Assets",
+        "Accounts Payable", "Payables And Accrued Expenses", "Current Debt", "Current Debt And Capital Lease Obligation",
+        "Other Current Liabilities", "Current Deferred Revenue", "Total Current Liabilities", "Current Liabilities",
+        "Long Term Debt", "Long Term Debt And Capital Lease Obligation", "Other Non Current Liabilities",
+        "Non Current Deferred Liabilities", "Total Non Current Liabilities Net Minority Interest",
+        "Total Liabilities Net Minority Interest", "Total Debt", "Net Debt",
+        "Common Stock", "Retained Earnings", "Capital Stock", "Additional Paid In Capital",
+        "Treasury Stock", "Gains Losses Not Affecting Retained Earnings",
+        "Total Equity Gross Minority Interest", "Stockholders Equity", "Minority Interest",
+        "Total Capitalization", "Common Stock Equity", "Invested Capital", "Working Capital",
+        "Tangible Book Value", "Net Tangible Assets", "Share Issued", "Ordinary Shares Number",
+    ],
+    "cashflow": [
+        "Net Income From Continuing Operations", "Net Income",
+        "Depreciation Amortization Depletion", "Depreciation And Amortization",
+        "Deferred Tax", "Deferred Income Tax", "Stock Based Compensation",
+        "Change In Working Capital", "Change In Receivables", "Change In Inventory",
+        "Change In Payable", "Other Non Cash Items",
+        "Cash Flow From Continuing Operating Activities", "Operating Cash Flow",
+        "Capital Expenditure", "Capital Expenditure Reported", "Net PPE Purchase And Sale",
+        "Purchase Of Investment", "Sale Of Investment", "Net Investment Purchase And Sale",
+        "Cash Flow From Continuing Investing Activities", "Investing Cash Flow",
+        "Repayment Of Debt", "Issuance Of Debt", "Repurchase Of Capital Stock",
+        "Issuance Of Capital Stock", "Cash Dividends Paid", "Common Stock Dividend Paid",
+        "Cash Flow From Continuing Financing Activities", "Financing Cash Flow",
+        "Free Cash Flow", "Changes In Cash", "Effect Of Exchange Rate Changes",
+        "End Cash Position", "Beginning Cash Position",
+    ],
+}
+
+def reorder_statement_rows(df, statement_key):
+    """Reorder a financial-statement DataFrame's rows into conventional
+    top-down presentation order (Revenue first, Net Income near the bottom
+    for income statements; Assets then Liabilities then Equity for balance
+    sheets; Operating -> Investing -> Financing for cash flow). Line items
+    yfinance returns that aren't in the canonical list are appended after,
+    in their original relative order, so nothing is ever dropped."""
+    if df is None or df.empty:
+        return df
+    order = STATEMENT_ROW_ORDER.get(statement_key, [])
+    idx_list = list(df.index)
+    idx_lower = {str(i).strip().lower(): i for i in idx_list}
+    placed = []
+    used = set()
+    for name in order:
+        key = name.strip().lower()
+        if key in idx_lower and idx_lower[key] not in used:
+            placed.append(idx_lower[key])
+            used.add(idx_lower[key])
+    remaining = [i for i in idx_list if i not in used]
+    return df.loc[placed + remaining]
+
+
 # ========================================
 # HOME — Market Dashboard (landing page)
 # ========================================
@@ -7852,17 +7951,18 @@ elif selected == "Chart Analysis":
             if stmt_df.empty:
                 st.info(f"{fin_statement} data unavailable for {chosen} (common for ETFs, foreign listings, or thinly-covered names).")
             else:
-                disp = stmt_df.copy()
+                stmt_df = reorder_statement_rows(stmt_df, stmt_key)
+                disp = (stmt_df / 1e6).round(2)   # single consistent unit ($M) so columns stay numeric and sort correctly
                 disp.columns = [pd.Timestamp(c).strftime("%b %Y") for c in disp.columns]
-                def _fmt_cell(v):
-                    if pd.isna(v): return ""
-                    av = abs(v)
-                    if av >= 1e9: return f"{v/1e9:,.2f}B"
-                    if av >= 1e6: return f"{v/1e6:,.1f}M"
-                    return f"{v:,.0f}"
-                disp = disp.apply(lambda col: col.map(_fmt_cell))
-                st.dataframe(disp, use_container_width=True, height=460)
-                st.caption("All figures in USD. Source: Yahoo Finance via yfinance.")
+                disp = disp.reset_index().rename(columns={"index": "Line Item"})
+                col_config = {"Line Item": cc_text("Line Item")}
+                for c in disp.columns:
+                    if c != "Line Item":
+                        col_config[c] = cc_money(c, decimals=1)
+                st.dataframe(disp, use_container_width=True, height=460, hide_index=True, column_config=col_config)
+                st.caption("Figures in $ millions. Source: Yahoo Finance via yfinance. Rows follow conventional statement order "
+                           "(Revenue → ... → Net Income for the income statement, etc.); any line item yfinance reports that "
+                           "isn't in the standard set is appended at the end rather than dropped. Click a column header to sort numerically.")
 
             st.divider()
             st.markdown("##### Key Ratios")
@@ -8561,29 +8661,32 @@ elif selected == "AI Strategy":
         per_current = [p for p in per if (p.get('target_weight') or 0) > 0]
         df = pd.DataFrame(per_current)
         if not df.empty:
-            df['Price'] = df['price_now'].apply(lambda x: f"${x:,.2f}" if x is not None else "n/a")
-            df['Since Incept'] = df['ret_pct'].apply(lambda x: f"{x:+.1f}%" if x is not None else "n/a")
-            df['Contribution'] = df['contribution'].apply(lambda x: f"{x:+.2f}%" if x is not None else "n/a")
-            df['Target Wt'] = df['target_weight'].apply(lambda x: f"{x:.1f}%" if x is not None else "")
-            df['Current Wt'] = df['ticker'].apply(lambda tk: f"{weight_now.get(tk):.1f}%" if weight_now.get(tk) is not None else "n/a")
-            def _drift_fmt(row):
+            # keep all these as NUMERIC columns (not pre-formatted strings) so
+            # the table sorts correctly by magnitude; column_config below
+            # controls the display format instead.
+            df['Price'] = df['price_now']
+            df['Since Incept'] = df['ret_pct']
+            df['Contribution'] = df['contribution']
+            df['Target Wt'] = df['target_weight']
+            df['Current Wt'] = df['ticker'].apply(lambda tk: weight_now.get(tk))
+            def _drift_val(row):
                 w = weight_now.get(row['ticker']); t = row.get('target_weight') or 0
-                if w is None: return "n/a"
-                d = w - t
-                flag = " 🔴" if abs(d) > _max_drift else (" 🟡" if abs(d) > _max_drift/2 else "")
-                return f"{d:+.1f}pp{flag}"
-            df['Drift'] = df.apply(_drift_fmt, axis=1)
-            df['Score'] = df['score'].apply(lambda x: f"{x:.1f}" if x is not None else "")
+                return (w - t) if w is not None else None
+            def _drift_flag(row):
+                d = _drift_val(row)
+                if d is None: return ""
+                return "🔴" if abs(d) > _max_drift else ("🟡" if abs(d) > _max_drift/2 else "")
+            df['Drift'] = df.apply(_drift_val, axis=1)
+            df['Flag'] = df.apply(_drift_flag, axis=1)
+            df['Score'] = df['score']
 
-            def _fmt_price(v):
-                return f"${v:,.2f}" if v is not None else "—"
             zones, opt, sec, ceil = [], [], [], []
             for _, r in df.iterrows():
                 z, t = ai_entry_zone(r['ticker'], r['price_now'])
                 zones.append(z)
-                opt.append(_fmt_price(t["optimal"]) if t else "—")
-                sec.append(_fmt_price(t["secondary"]) if t else "—")
-                ceil.append(_fmt_price(t["ceiling"]) if t else "—")
+                opt.append(t["optimal"] if t else None)
+                sec.append(t["secondary"] if t else None)
+                ceil.append(t["ceiling"] if t else None)
             df['Optimal'] = opt
             df['Secondary'] = sec
             df['Do-Not-Exceed'] = ceil
@@ -8594,14 +8697,22 @@ elif selected == "AI Strategy":
             df = df.sort_values(['_ord', 'target_weight'], ascending=[True, False])
 
             if show_entries:
-                cols = ['tier', 'ticker', 'name', 'Score', 'Target Wt', 'Current Wt', 'Drift', 'Price', 'Zone',
+                cols = ['tier', 'ticker', 'name', 'Score', 'Target Wt', 'Current Wt', 'Drift', 'Flag', 'Price', 'Zone',
                         'Optimal', 'Secondary', 'Do-Not-Exceed', 'Since Incept']
             else:
-                cols = ['tier', 'ticker', 'name', 'Score', 'Target Wt', 'Current Wt', 'Drift', 'Price', 'Since Incept', 'Contribution']
+                cols = ['tier', 'ticker', 'name', 'Score', 'Target Wt', 'Current Wt', 'Drift', 'Flag', 'Price', 'Since Incept', 'Contribution']
             show = df[cols].rename(columns={'tier': 'Tier', 'ticker': 'Ticker', 'name': 'Name'})
-            st.dataframe(show, use_container_width=True, hide_index=True, height=560)
+            port_col_config = {
+                'Score': cc_number('Score', 1), 'Target Wt': cc_percent('Target Wt', 1),
+                'Current Wt': cc_percent('Current Wt', 1), 'Drift': cc_percent('Drift', 1, signed=True),
+                'Flag': cc_text('Flag'), 'Price': cc_money('Price'),
+                'Optimal': cc_money('Optimal'), 'Secondary': cc_money('Secondary'), 'Do-Not-Exceed': cc_money('Do-Not-Exceed'),
+                'Since Incept': cc_percent('Since Incept', 1, signed=True), 'Contribution': cc_percent('Contribution', 2, signed=True),
+            }
+            st.dataframe(show, use_container_width=True, hide_index=True, height=560, column_config=port_col_config)
             st.caption(f"Current Wt / Drift reflect actual share-based drift since the {AI_REBALANCE_DATE} rebalance (live prices), "
-                       f"not a re-derivation of the target weight. 🔴 = drift exceeds {_max_drift:.1f}pp · 🟡 = over half that threshold.")
+                       f"not a re-derivation of the target weight. 🔴 = drift exceeds {_max_drift:.1f}pp · 🟡 = over half that threshold. "
+                       "Columns are numeric — click a header to sort by magnitude.")
             if show_entries:
                 st.caption("Zone: 🟢 at/below optimal or in buy zone · 🟡 below the do-not-exceed ceiling · 🔴 above ceiling · "
                            "🔄 RE-RATE/Stale = a recent earnings or guidance event (or a gap >12% past the ceiling) has made the static levels obsolete — re-derive off new guidance before acting. "
@@ -8678,21 +8789,18 @@ elif selected == "AI Strategy":
                               yaxis=dict(title="Contribution (%)", gridcolor='rgba(120,130,140,0.12)'))
             st.plotly_chart(fig, use_container_width=True)
 
+            contrib_cc = {"Return": cc_percent("Return", 1, signed=True), "Contribution": cc_percent("Contribution", 2, signed=True)}
             cc1, cc2 = st.columns(2)
             with cc1:
                 st.markdown("**Top 5 Contributors**")
-                top = dfp.head(5)[['ticker', 'ret_pct', 'contribution']].copy()
-                top['Return'] = top['ret_pct'].apply(lambda x: f"{x:+.1f}%")
-                top['Contribution'] = top['contribution'].apply(lambda x: f"{x:+.2f}%")
-                st.dataframe(top[['ticker', 'Return', 'Contribution']].rename(columns={'ticker': 'Ticker'}),
-                             use_container_width=True, hide_index=True)
+                top = dfp.head(5)[['ticker', 'ret_pct', 'contribution']].rename(
+                    columns={'ticker': 'Ticker', 'ret_pct': 'Return', 'contribution': 'Contribution'})
+                st.dataframe(top, use_container_width=True, hide_index=True, column_config=contrib_cc)
             with cc2:
                 st.markdown("**Bottom 5 Contributors**")
-                bot = dfp.tail(5)[['ticker', 'ret_pct', 'contribution']].copy()
-                bot['Return'] = bot['ret_pct'].apply(lambda x: f"{x:+.1f}%")
-                bot['Contribution'] = bot['contribution'].apply(lambda x: f"{x:+.2f}%")
-                st.dataframe(bot[['ticker', 'Return', 'Contribution']].rename(columns={'ticker': 'Ticker'}),
-                             use_container_width=True, hide_index=True)
+                bot = dfp.tail(5)[['ticker', 'ret_pct', 'contribution']].rename(
+                    columns={'ticker': 'Ticker', 'ret_pct': 'Return', 'contribution': 'Contribution'})
+                st.dataframe(bot, use_container_width=True, hide_index=True, column_config=contrib_cc)
         else:
             st.warning("Could not compute contributions. Price data may be unavailable.")
 
@@ -8774,13 +8882,15 @@ elif selected == "AI Strategy":
             for r in sorted(ba["rows"], key=lambda x: (x['vs_ndx'] is None, -(x['vs_ndx'] or -999))):
                 brow.append({
                     "Ticker": r['ticker'], "Tier": r['tier'],
-                    "Return": f"{r['ret']:+.1f}%",
-                    "vs NDX": f"{r['vs_ndx']:+.1f}" if r['vs_ndx'] is not None else "n/a",
+                    "Return": r['ret'],
+                    "vs NDX": r['vs_ndx'],
                     "Beat NDX": "✅" if r['beat_ndx'] else "—",
-                    "vs S&P": f"{r['vs_voo']:+.1f}" if r['vs_voo'] is not None else "n/a",
+                    "vs S&P": r['vs_voo'],
                     "Beat S&P": "✅" if r['beat_voo'] else "—",
                 })
-            st.dataframe(pd.DataFrame(brow), use_container_width=True, hide_index=True, height=420)
+            ba_cc = {"Return": cc_percent("Return", 1, signed=True), "vs NDX": cc_percent("vs NDX", 1, signed=True),
+                     "vs S&P": cc_percent("vs S&P", 1, signed=True)}
+            st.dataframe(pd.DataFrame(brow), use_container_width=True, hide_index=True, height=420, column_config=ba_cc)
             st.caption(f"Benchmarks since inception: NDX {ndx_tot:+.1f}%" + (f" · S&P 500 (VOO) {voo_tot:+.1f}%" if voo_tot is not None else "")
                        + ". A high batting average with lower active return (or vice versa) tells you whether performance is broad-based or driven by a few names.")
         else:
@@ -8801,16 +8911,20 @@ elif selected == "AI Strategy":
         for r in attr_rows:
             ar.append({
                 "Tier": r['tier'].replace("TIER ", "T").replace("HYPER", "Hyper"),
-                "Port Wt": f"{r['wp']:.1f}%", "Bench Wt": f"{r['wb']:.1f}%",
-                "Port Ret": f"{r['Rp']:+.1f}%", "Bench Ret": f"{r['Rb']:+.1f}%",
-                "Allocation": f"{r['alloc']:+.2f}", "Selection": f"{r['sel']:+.2f}",
-                "Interaction": f"{r['inter']:+.2f}", "Total": f"{r['total']:+.2f}",
+                "Port Wt": r['wp'], "Bench Wt": r['wb'],
+                "Port Ret": r['Rp'], "Bench Ret": r['Rb'],
+                "Allocation": r['alloc'], "Selection": r['sel'],
+                "Interaction": r['inter'], "Total": r['total'],
             })
-        ar.append({"Tier": "TOTAL", "Port Wt": "", "Bench Wt": "", "Port Ret": f"{attr_tot['Rp']:+.1f}%",
-                   "Bench Ret": f"{attr_tot['Rb']:+.1f}%", "Allocation": f"{attr_tot['alloc']:+.2f}",
-                   "Selection": f"{attr_tot['sel']:+.2f}", "Interaction": f"{attr_tot['inter']:+.2f}",
-                   "Total": f"{attr_tot['active']:+.2f}"})
-        st.dataframe(pd.DataFrame(ar), use_container_width=True, hide_index=True)
+        ar.append({"Tier": "TOTAL", "Port Wt": None, "Bench Wt": None, "Port Ret": attr_tot['Rp'],
+                   "Bench Ret": attr_tot['Rb'], "Allocation": attr_tot['alloc'],
+                   "Selection": attr_tot['sel'], "Interaction": attr_tot['inter'],
+                   "Total": attr_tot['active']})
+        attr_cc = {"Port Wt": cc_percent("Port Wt", 1), "Bench Wt": cc_percent("Bench Wt", 1),
+                   "Port Ret": cc_percent("Port Ret", 1, signed=True), "Bench Ret": cc_percent("Bench Ret", 1, signed=True),
+                   "Allocation": cc_percent("Allocation", 2, signed=True), "Selection": cc_percent("Selection", 2, signed=True),
+                   "Interaction": cc_percent("Interaction", 2, signed=True), "Total": cc_percent("Total", 2, signed=True)}
+        st.dataframe(pd.DataFrame(ar), use_container_width=True, hide_index=True, column_config=attr_cc)
         ac1, ac2, ac3 = st.columns(3)
         ac1.metric("Allocation effect", f"{attr_tot['alloc']:+.2f}%", help="Value from over/underweighting tiers vs the bench universe.")
         ac2.metric("Selection effect", f"{attr_tot['sel']:+.2f}%", help="Value from the specific names held vs bench names in the same tier.")
@@ -9012,12 +9126,13 @@ elif selected == "AI Strategy":
                     continue
                 et_rows.append({
                     "Ticker": h['ticker'], "Tier": h.get('tier', ''),
-                    "Optimal": f"${t['optimal']:,.2f}", "Secondary": f"${t['secondary']:,.2f}",
-                    "Do-Not-Exceed": f"${t['ceiling']:,.2f}", "P/E Anchor": t.get('pe_anchor', ''),
+                    "Optimal": t['optimal'], "Secondary": t['secondary'],
+                    "Do-Not-Exceed": t['ceiling'], "P/E Anchor": t.get('pe_anchor', ''),
                     "Re-rate?": "🔄 refresh" if t.get('reval') else "—",
                 })
             if et_rows:
-                st.dataframe(pd.DataFrame(et_rows), use_container_width=True, hide_index=True, height=420)
+                et_cc = {"Optimal": cc_money("Optimal"), "Secondary": cc_money("Secondary"), "Do-Not-Exceed": cc_money("Do-Not-Exceed")}
+                st.dataframe(pd.DataFrame(et_rows), use_container_width=True, hide_index=True, height=420, column_config=et_cc)
 
             # ----- Share calculator -----
             st.divider()
@@ -9064,18 +9179,17 @@ elif selected == "AI Strategy":
                                    "Target Shares": tgt, "Current Shares": cur,
                                    "Action": "BUY" if d > 0 else ("SELL" if d < 0 else "HOLD"),
                                    "Shares to Trade": abs(d),
-                                   "Trade $": f"${abs(d) * (r['Price'] or 0):,.0f}"})
+                                   "Trade $": abs(d) * (r['Price'] or 0)})
                 st.markdown("**Buy / Sell to reach targets**")
-                st.dataframe(pd.DataFrame(deltas), use_container_width=True, hide_index=True, height=460)
+                deltas_cc = {"Trade $": cc_money("Trade $", 0)}
+                st.dataframe(pd.DataFrame(deltas), use_container_width=True, hide_index=True, height=460, column_config=deltas_cc)
                 st.download_button("⬇️ Download buy/sell list (CSV)", pd.DataFrame(deltas).to_csv(index=False),
                                    "ai_buy_sell_list.csv", "text/csv")
             else:
                 disp_calc = calc_df.drop(columns=["Current Shares"]).copy()
-                disp_calc["Price"] = disp_calc["Price"].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "n/a")
-                disp_calc["Target $"] = disp_calc["Target $"].apply(lambda x: f"${x:,.0f}")
-                disp_calc["Target %"] = disp_calc["Target %"].apply(lambda x: f"{x:.1f}%")
-                disp_calc["Target Shares"] = disp_calc["Target Shares"].apply(lambda x: f"{int(x):,}")
-                st.dataframe(disp_calc, use_container_width=True, hide_index=True, height=460)
+                disp_calc_cc = {"Price": cc_money("Price"), "Target $": cc_money("Target $", 0),
+                                "Target %": cc_percent("Target %", 1), "Target Shares": cc_int("Target Shares")}
+                st.dataframe(disp_calc, use_container_width=True, hide_index=True, height=460, column_config=disp_calc_cc)
                 _tot = sum((r["Target Shares"] * (r["Price"] or 0)) for r in calc_seed)
                 st.caption(f"Total deployed at target: ${_tot:,.0f} of ${calc_notional:,.0f} "
                            f"(${calc_notional - _tot:,.0f} residual cash). Prices are live, so counts shift intraday.")
@@ -9094,17 +9208,20 @@ elif selected == "AI Strategy":
             bz, btgt = ai_bench_zone(b['ticker'], pr.get('price_now'))
             brows.append({
                 "Tier": b['tier'], "Ticker": b['ticker'], "Name": b['name'],
-                "Score": f"{b['score']:.1f}" if b.get('score') is not None else "",
-                "Price": f"${pr.get('price_now'):,.2f}" if pr.get('price_now') is not None else "n/a",
-                "Since Incept": f"{pr.get('ret_pct'):+.1f}%" if pr.get('ret_pct') is not None else "n/a",
+                "Score": b.get('score'),
+                "Price": pr.get('price_now'),
+                "Since Incept": pr.get('ret_pct'),
                 "Zone": bz,
-                "Optimal": f"${btgt['optimal']:,.2f}" if btgt else "—",
-                "Ceiling": f"${btgt['ceiling']:,.2f}" if btgt else "—",
+                "Optimal": btgt['optimal'] if btgt else None,
+                "Ceiling": btgt['ceiling'] if btgt else None,
                 "Note": b.get('note', ''),
             })
         tier_order = {"HYPER": 0, "TIER 1": 1, "TIER 2": 2, "TIER 3": 3}
         brows.sort(key=lambda r: (tier_order.get(r["Tier"], 99), r["Ticker"]))
-        st.dataframe(pd.DataFrame(brows), use_container_width=True, hide_index=True, height=560)
+        bench_cc = {"Score": cc_number("Score", 1), "Price": cc_money("Price"),
+                    "Since Incept": cc_percent("Since Incept", 1, signed=True),
+                    "Optimal": cc_money("Optimal"), "Ceiling": cc_money("Ceiling")}
+        st.dataframe(pd.DataFrame(brows), use_container_width=True, hide_index=True, height=560, column_config=bench_cc)
 
         # bench equal-weight performance summary
         rets = [bprices.get(b['ticker'], {}).get('ret_pct') for b in bench_list]
@@ -9191,15 +9308,17 @@ elif selected == "AI Strategy":
                     "Status": status,
                     "Why": "; ".join(reasons) if reasons else "—",
                     "Next Earnings": ei.get("next") or "—",
-                    "Anchor Ceiling": f"${old_ceil:,.2f}" if old_ceil else "—",
-                    "Live-EPS Ceiling": f"${new_ceil:,.2f}" if new_ceil else "n/a",
-                    "Ceiling Drift": f"{ceil_drift:+.0f}%" if ceil_drift is not None else "—",
+                    "Anchor Ceiling": old_ceil,
+                    "Live-EPS Ceiling": new_ceil,
+                    "Ceiling Drift": ceil_drift,
                 })
             mon_df = pd.DataFrame(mon_rows)
             # sort: review first
             mon_df["_o"] = mon_df["Status"].apply(lambda s: 0 if "REVIEW" in s else 1)
             mon_df = mon_df.sort_values(["_o", "Ticker"]).drop(columns="_o")
-        st.dataframe(mon_df, use_container_width=True, hide_index=True, height=560)
+        mon_cc = {"Anchor Ceiling": cc_money("Anchor Ceiling"), "Live-EPS Ceiling": cc_money("Live-EPS Ceiling"),
+                  "Ceiling Drift": cc_percent("Ceiling Drift", 0, signed=True)}
+        st.dataframe(mon_df, use_container_width=True, hide_index=True, height=560, column_config=mon_cc)
         st.caption("Live-EPS Ceiling = (forward P/E anchor) × (live forward EPS from the data feed). "
                    "When it drifts far from the static Anchor Ceiling, the static target is stale; re-derive. "
                    "Forward EPS is best-effort from free data and can lag a fresh print by a day.")
@@ -9313,11 +9432,11 @@ elif selected == "AI Strategy":
         inc_disp = []
         for r in sorted(inc_rows, key=lambda x: (tier_order.get(x['tier'], 9), -(x['weight'] or 0))):
             inc_disp.append({"Date": r['date'], "Action": r['action'], "Ticker": r['ticker'],
-                             "Name": r['name'], "Tier": r['tier'], "Target Wt": f"{r['weight']:.1f}%",
-                             "Fill Price": f"${r['price']:,.2f}" if r['price'] else "n/a",
-                             "Shares": f"{r['shares']:,}" if r['shares'] is not None else "n/a",
-                             "Value": f"${r['value']:,.0f}" if r['value'] is not None else "n/a"})
-        st.dataframe(pd.DataFrame(inc_disp), use_container_width=True, hide_index=True, height=420)
+                             "Name": r['name'], "Tier": r['tier'], "Target Wt": r['weight'],
+                             "Fill Price": r['price'], "Shares": r['shares'], "Value": r['value']})
+        inc_cc = {"Target Wt": cc_percent("Target Wt", 1), "Fill Price": cc_money("Fill Price"),
+                  "Shares": cc_int("Shares"), "Value": cc_money("Value", 0)}
+        st.dataframe(pd.DataFrame(inc_disp), use_container_width=True, hide_index=True, height=420, column_config=inc_cc)
 
         # ===== Section 2: 6/1 rebalance =====
         st.divider()
@@ -9333,11 +9452,12 @@ elif selected == "AI Strategy":
             for r in sorted(reb_rows, key=lambda x: (action_order.get(x['action'], 9), x['ticker'])):
                 reb_disp.append({"Date": r['date'], "Action": r['action'], "Ticker": r['ticker'],
                                  "Name": r['name'], "Tier": r['tier'],
-                                 "Drifted Wt": f"{r['from_w']:.1f}%", "Target Wt": f"{r['target_w']:.1f}%",
-                                 "Fill Price": f"${r['price']:,.2f}" if r['price'] else "n/a",
-                                 "Δ Shares": (f"{r['shares']:+,}" if r['shares'] is not None else "n/a"),
-                                 "Δ Value": (f"${r['value']:+,.0f}" if r['value'] is not None else "n/a")})
-            st.dataframe(pd.DataFrame(reb_disp), use_container_width=True, hide_index=True, height=320)
+                                 "Drifted Wt": r['from_w'], "Target Wt": r['target_w'],
+                                 "Fill Price": r['price'], "Δ Shares": r['shares'], "Δ Value": r['value']})
+            reb_cc = {"Drifted Wt": cc_percent("Drifted Wt", 1), "Target Wt": cc_percent("Target Wt", 1),
+                      "Fill Price": cc_money("Fill Price"), "Δ Shares": cc_int("Δ Shares", signed=True),
+                      "Δ Value": cc_money_signed("Δ Value", 0)}
+            st.dataframe(pd.DataFrame(reb_disp), use_container_width=True, hide_index=True, height=320, column_config=reb_cc)
             st.caption("Drifted Wt = each position's weight at the 6/1 close after price moves since 2/10; "
                        "Target Wt = its current target. TRIM = sell back to target (e.g. winners like Dell that drifted "
                        "above weight), ADD = buy up to target, SELL = full exit, BUY (new) = new position. "
